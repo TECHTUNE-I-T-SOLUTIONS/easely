@@ -22,7 +22,25 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const { data: ride, error } = await supabaseAdmin!
       .from("rides")
-      .select("*")
+      .select(
+        `
+        *,
+        drivers:driver_id (
+          id,
+          user_id,
+          vehicle_type,
+          plate_number,
+          vehicle_picture_url,
+          average_rating,
+          users:user_id (
+            first_name,
+            last_name,
+            phone_number,
+            profile_picture_url
+          )
+        )
+      `
+      )
       .eq("id", rideId)
       .single()
 
@@ -32,6 +50,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const canView =
       ride.rider_id === session.user.id ||
+      ride.drivers?.user_id === session.user.id ||
       session.user.role === "admin" ||
       session.user.role === "super_admin"
 

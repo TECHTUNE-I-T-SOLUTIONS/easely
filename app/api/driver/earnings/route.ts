@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabase, supabaseAdmin } from "@/lib/supabase"
 import { getSessionFromRequest } from "@/lib/auth"
 
-// Platform fee: 13% of each ride amount
-const PLATFORM_FEE_PERCENTAGE = 0.13
+// Platform fee: 15% of each ride amount
+const PLATFORM_FEE_PERCENTAGE = 0.15
 
 export async function GET(request: NextRequest) {
   try {
@@ -99,7 +99,7 @@ export async function GET(request: NextRequest) {
         timeframe,
         total_rides_accepted: rides?.length || 0,
         total_ride_earnings: totalRideAmount, // What riders paid
-        platform_fee_percentage: PLATFORM_FEE_PERCENTAGE * 100, // 13%
+        platform_fee_percentage: PLATFORM_FEE_PERCENTAGE * 100,
         total_platform_fee: totalPlatformFee, // Total platform fees
         total_driver_earnings: totalDriverEarnings, // What driver actually earned
         driver_payable_to_platform: totalPlatformFee, // For potential payment

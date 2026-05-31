@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getSessionFromRequest } from "@/lib/auth";
+import { cancelExpiredOpenRides } from "@/lib/ride-expiry";
 
 export async function GET(request: NextRequest) {
   try {
@@ -24,6 +25,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    await cancelExpiredOpenRides().catch((expiryError) => {
+      console.error("Available rides expiry cleanup error:", expiryError);
+    });
+
     // Get available rides (pending status, not yet accepted by any driver)
     const { data: rides, error } = await supabase
       .from("rides")
@@ -43,6 +48,7 @@ export async function GET(request: NextRequest) {
         created_at
       `)
       .eq("status", "pending")
+      .gte("pickup_time", new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
       .order("created_at", { ascending: false })
       .limit(20);
 

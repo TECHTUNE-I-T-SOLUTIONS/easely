@@ -1,6 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseAdmin } from "@/lib/supabase";
 import { uploadFileWithServiceRole } from "@/lib/upload-file";
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const summaryOnly = searchParams.get("summary") !== "false";
+
+    const { data: drivers, error } = await supabaseAdmin
+      .from("drivers")
+      .select("id, availability_status, verified, vehicle_type, operating_zones, updated_at")
+      .eq("verified", true);
+
+    if (error) {
+      console.error("Error fetching driver availability summary:", error);
+      return NextResponse.json(
+        { error: "Failed to fetch driver availability" },
+        { status: 500 }
+      );
+    }
+
+    const safeDrivers = drivers || [];
+    const activeDrivers = safeDrivers.filter((driver: any) =>
+      ["online", "available", "active"].includes(String(driver.availability_status || "").toLowerCase())
+    );
+
+    const payload = {
+      activeDrivers: activeDrivers.length,
+      active_drivers: activeDrivers.length,
+      totalVerifiedDrivers: safeDrivers.length,
+      drivers: summaryOnly
+        ? []
+        : safeDrivers.map((driver: any) => ({
+            id: driver.id,
+            availability_status: driver.availability_status,
+            vehicle_type: driver.vehicle_type,
+            operating_zones: driver.operating_zones || [],
+            updated_at: driver.updated_at,
+          })),
+    };
+
+    return NextResponse.json(payload, { status: 200 });
+  } catch (error) {
+    console.error("Driver availability summary error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {

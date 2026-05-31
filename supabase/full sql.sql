@@ -264,6 +264,10 @@ CREATE TABLE public.notifications (
   data jsonb DEFAULT '{}'::jsonb,
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
+  deep_link text,
+  entity_type text,
+  entity_id uuid,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT notifications_pkey PRIMARY KEY (id),
   CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
@@ -379,6 +383,19 @@ CREATE TABLE public.rides (
   CONSTRAINT rides_driver_id_fkey FOREIGN KEY (driver_id) REFERENCES public.drivers(id),
   CONSTRAINT rides_remitted_by_payment_fkey FOREIGN KEY (remitted_by_payment_id) REFERENCES public.driver_payments(id),
   CONSTRAINT rides_rider_id_fkey FOREIGN KEY (rider_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.search_locations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  place_id text NOT NULL UNIQUE,
+  name text NOT NULL,
+  formatted_address text NOT NULL,
+  latitude double precision NOT NULL,
+  longitude double precision NOT NULL,
+  search_keywords text NOT NULL DEFAULT ''::text,
+  usage_count integer NOT NULL DEFAULT 0,
+  last_used_at timestamp with time zone NOT NULL DEFAULT now(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT search_locations_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.support_tickets (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

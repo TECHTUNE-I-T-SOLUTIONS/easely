@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase"
 import { emitRideAccepted, emitRideTaken } from "@/lib/push-emitters"
 import { sendRideAcceptanceSMS } from "@/lib/termii"
+import { cancelExpiredOpenRides } from "@/lib/ride-expiry"
 
 export type RideAcceptanceSource = "app" | "sms"
 
@@ -13,7 +14,7 @@ interface AcceptRideInput {
 interface AcceptRideResult {
   success: boolean
   status: number
-  code: "accepted" | "ride_not_found" | "driver_not_found" | "ride_unavailable" | "internal_error"
+  code: "accepted" | "ride_not_found" | "driver_not_found" | "ride_unavailable" | "ride_expired" | "internal_error"
   message: string
   ride?: any
 }
@@ -51,6 +52,15 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
     console.log("[RideAcceptance] Driver found:", driver.id)
 
     const now = new Date().toISOString()
+    const expired = await cancelExpiredOpenRides([input.rideId])
+    if (expired.length > 0) {
+      return {
+        success: false,
+        status: 410,
+        code: "ride_expired",
+        message: "This ride expired at the end of its scheduled booking day and has been cancelled.",
+      }
+    }
 
     // Update ride with driver acceptance
     // Only update if ride is in pending or dispatched state and has no driver assigned

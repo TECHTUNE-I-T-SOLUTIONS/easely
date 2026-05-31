@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Driver profile not found" }, { status: 404 })
     }
 
-    let payload: { date?: string } = {}
+    let payload: { date?: string; returnUrl?: string } = {}
     try {
       payload = (await request.json()) || {}
     } catch {
@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
     }
 
     const requestedDate = payload?.date
+    const mobileReturnUrl = typeof payload?.returnUrl === "string" ? payload.returnUrl : null
 
     await updateOverdueSettlements(driver.id)
 
@@ -86,10 +87,13 @@ export async function POST(request: NextRequest) {
 
     const paystackUrl = "https://api.paystack.co/transaction/initialize"
 
-    // Build callback URL - can be web endpoint that triggers deep link, or skip it for mobile
-    const callbackUrl = process.env.NEXT_PUBLIC_APP_URL 
-      ? `${process.env.NEXT_PUBLIC_APP_URL}/api/driver/payment-callback`
-      : ""
+    const requestOrigin = new URL(request.url).origin
+    const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL
+    const callbackOrigin =
+      configuredOrigin && !configuredOrigin.includes("localhost")
+        ? configuredOrigin
+        : requestOrigin
+    const callbackUrl = `${callbackOrigin}/api/driver/payment-callback`
 
     const paystackResponse = await fetch(paystackUrl, {
       method: "POST",
@@ -104,6 +108,7 @@ export async function POST(request: NextRequest) {
           driverId: driver.id,
           settlementIds,
           type: "settlement_payment",
+          returnUrl: mobileReturnUrl,
         },
         callback_url: callbackUrl || undefined,
       }),
@@ -129,6 +134,7 @@ export async function POST(request: NextRequest) {
         metadata: {
           paystack_access_code: paystackData.data.access_code,
           settlement_ids: settlementIds,
+          return_url: mobileReturnUrl,
         },
       })
       .select()

@@ -21,6 +21,19 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    const { data: storedPayment } = await supabase
+      .from("driver_payments")
+      .select("metadata")
+      .eq("payment_reference", reference)
+      .maybeSingle()
+
+    const storedReturnUrl = (storedPayment?.metadata as any)?.return_url
+    if (typeof storedReturnUrl === "string" && storedReturnUrl.length > 0) {
+      const redirectUrl = new URL(storedReturnUrl)
+      redirectUrl.searchParams.set("reference", reference)
+      return NextResponse.redirect(redirectUrl.toString(), 302)
+    }
+
     // Check if requesting from mobile via deep link redirect
     const userAgent = request.headers.get("user-agent") || ""
     const isMobileContext = userAgent.toLowerCase().includes("mobile") || userAgent.toLowerCase().includes("android") || userAgent.toLowerCase().includes("iphone")
@@ -209,6 +222,14 @@ export async function POST(request: NextRequest) {
     const paymentData = verifyData.data
     const { driverId, settlementIds } = paymentData.metadata
 
+    const { data: existingPayment } = await supabase
+      .from("driver_payments")
+      .select("id, amount, status")
+      .eq("payment_reference", reference)
+      .maybeSingle()
+
+    const wasAlreadyCompleted = existingPayment?.status === "completed"
+
     // Update payment status to completed
     const { data: payment } = await supabase
       .from("driver_payments")
@@ -244,7 +265,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Send push notification to driver
-    if (driverUserId) {
+    if (driverUserId && !wasAlreadyCompleted) {
       try {
         const amount = paymentData.amount ? (paymentData.amount / 100) : payment?.amount || 0
         await sendPushNotification([driverUserId], {
@@ -288,6 +309,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      paymentStatus: "success",
+      reference,
       message: "Payment verified and settlement updated",
       payment,
     })

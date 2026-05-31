@@ -89,6 +89,7 @@ export async function POST(request: NextRequest) {
         type: "ride_accepted",
         data: {
           rideId: ride.id,
+          deeplink: `/rider/active-ride?rideId=${ride.id}`,
           driverId: driver.id,
           driverName,
           pickupZone: ride.pickup_zone,
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("API error:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 }
     );
   }

@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     const base_fare_per_km = 600
     const final_fare_amount = fare_amount || estimated_distance * base_fare_per_km
     const final_platform_fee = platform_fee || final_fare_amount * 0.15
-    const final_driver_earnings = driver_earnings || final_fare_amount * 0.85
+    const final_driver_earnings = driver_earnings || final_fare_amount - final_platform_fee
 
     // Create ride record
     const { data: ride, error } = await supabaseAdmin

@@ -44,9 +44,10 @@ export async function POST(request: NextRequest) {
         title: "Driver Status Locked",
         message:
           "Your driver status has been disabled due to unpaid settlement fees. Please complete your payment to restore access.",
-        type: "alert",
+        type: "admin",
         channel: "in_app",
         data: {
+          event_type: "availability_locked",
           driverId,
           reason,
         },
@@ -118,8 +119,11 @@ export async function PUT(request: NextRequest) {
         user_id: driverData.user_id,
         title: "Driver Status Restored",
         message: "Your driver status has been restored. You can now accept rides.",
-        type: "success",
+        type: "admin",
         channel: "in_app",
+        data: {
+          event_type: "availability_restored",
+        },
       })
     }
 

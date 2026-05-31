@@ -3,6 +3,7 @@ import { supabase, supabaseAdmin } from "@/lib/supabase"
 import { getSessionFromRequest } from "@/lib/auth"
 import { emitDriverArrived, emitRideCompleted, emitRideUpdate } from "@/lib/push-emitters"
 import { sendPushNotification } from "@/lib/push-service"
+import { cancelExpiredOpenRides, isRideExpired } from "@/lib/ride-expiry"
 
 export async function POST(request: NextRequest) {
   try {
@@ -56,6 +57,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Ride not found" }, { status: 404 })
     }
 
+    if (isRideExpired(ride)) {
+      await cancelExpiredOpenRides([rideId])
+      return NextResponse.json(
+        {
+          error: "This ride expired at the end of its scheduled booking day and has been cancelled.",
+          code: "ride_expired",
+        },
+        { status: 410 }
+      )
+    }
+
     // Verify driver is the one who accepted the ride
     if (ride.driver_id !== driver.id) {
       console.error("[UpdateRideStatus] Driver not authorized for this ride", {
@@ -63,7 +75,7 @@ export async function POST(request: NextRequest) {
         rideDriverId: ride.driver_id,
       })
       return NextResponse.json(
-        { error: "You are not assigned to this ride" },
+        { error: "You are not assigned to this ride", code: "ride_not_assigned" },
         { status: 403 }
       )
     }

@@ -157,7 +157,7 @@ export const sendPushNotification = async (
     body: string;
     data?: Record<string, any>;
     categoryId?: string;
-    type: 'ride_request' | 'ride_accepted' | 'ride_update' | 'ride_cancelled' | 'support_message' | 'payment_received' | 'security_alert';
+    type: 'ride_request' | 'ride_accepted' | 'ride_update' | 'ride_cancelled' | 'support_message' | 'payment_received' | 'security_alert' | 'remittance_due' | 'remittance_reminder';
   }
 ) => {
   const results: Array<{ userId: string; success: boolean; error?: string }> = [];
@@ -231,6 +231,7 @@ export const sendPushNotification = async (
             body: payload.body,
             data: {
               type: payload.type,
+              deeplink: payload.data?.deeplink,
               timestamp: new Date().toISOString(),
               ...payload.data,
             },

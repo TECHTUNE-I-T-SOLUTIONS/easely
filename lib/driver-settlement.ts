@@ -12,7 +12,7 @@ export interface DriverSettlementSummary {
   paymentDueDate: string
 }
 
-const PLATFORM_FEE_RATE = 0.15
+export const PLATFORM_FEE_RATE = 0.15
 
 function startOfDay(date: Date) {
   const copy = new Date(date)
@@ -147,7 +147,41 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
     .select()
     .single()
 
-  if (insertError) throw insertError
+  if (insertError) {
+    if ((insertError as any).code !== "23505") {
+      throw insertError
+    }
+
+    const { data: racedSettlement, error: racedFetchError } = await supabaseAdmin
+      .from("driver_daily_settlement")
+      .select("*")
+      .eq("driver_id", driverId)
+      .eq("settlement_date", dateString)
+      .single()
+
+    if (racedFetchError) throw racedFetchError
+
+    const racedStatusToSave: SettlementStatus =
+      racedSettlement.settlement_status === "paid" ? "paid" : settlementStatusToSave
+
+    const { data: updatedAfterRace, error: racedUpdateError } = await supabaseAdmin
+      .from("driver_daily_settlement")
+      .update({
+        total_rides: totalRides,
+        total_fare_amount: totalFareAmount,
+        total_platform_fees: totalPlatformFees,
+        total_driver_earnings: totalDriverEarnings,
+        settlement_status: racedStatusToSave,
+        payment_due_date: paymentDueDate,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", racedSettlement.id)
+      .select()
+      .single()
+
+    if (racedUpdateError) throw racedUpdateError
+    return updatedAfterRace
+  }
   return inserted
 }
 

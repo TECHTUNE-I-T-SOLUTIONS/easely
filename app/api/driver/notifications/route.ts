@@ -2,6 +2,56 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabase } from "@/lib/supabase"
 import { getSessionFromRequest } from "@/lib/auth"
 
+const parseMaybeJson = (value: any) => {
+  if (!value || typeof value !== "string") return value || {}
+  try {
+    return JSON.parse(value)
+  } catch {
+    return {}
+  }
+}
+
+const buildNotificationLink = (notification: any, role: "rider" | "driver") => {
+  const metadata = parseMaybeJson(notification?.metadata)
+  const data = parseMaybeJson(notification?.data)
+  const payload = { ...metadata, ...data, ...notification }
+  const explicit = payload.deep_link || payload.deeplink || payload.action_url
+  if (typeof explicit === "string" && explicit.trim()) return explicit.trim()
+
+  const rideId = payload.rideId || payload.ride_id || payload.ride?.id
+  const ticketId = payload.ticketId || payload.ticket_id || payload.support_ticket_id
+  const chatId = payload.chatId || payload.chat_id
+  const type = String(payload.type || payload.notification_type || "").toLowerCase()
+
+  if (type === "ride_request") {
+    return rideId ? "/driver/available-rides?focusRide=" + rideId : "/driver/rides"
+  }
+  if (["ride", "ride_accepted", "ride_update", "driver_arrived", "trip_started", "ride_completed", "ride_cancelled"].includes(type)) {
+    return rideId ? "/driver/ride-details?rideId=" + rideId : "/driver/rides"
+  }
+  if (["message", "chat_message"].includes(type)) {
+    return "/driver/chat" + (rideId ? "?rideId=" + rideId : chatId ? "?chatId=" + chatId : "")
+  }
+  if (["support_message", "support_ticket"].includes(type)) {
+    return "/driver/help-and-support" + (ticketId ? "?ticketId=" + ticketId : "")
+  }
+  if (["remittance_due", "remittance_reminder", "payment", "payment_received"].includes(type)) {
+    return "/driver/wallet"
+  }
+  return null
+}
+
+const enrichNotification = (notification: any, role: "rider" | "driver") => {
+  const metadata = parseMaybeJson(notification?.metadata)
+  const deepLink = buildNotificationLink(notification, role)
+  return {
+    ...notification,
+    metadata,
+    deep_link: notification.deep_link || deepLink,
+    action_url: notification.action_url || deepLink,
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionFromRequest(request)
@@ -33,8 +83,12 @@ export async function GET(request: NextRequest) {
     // Count unread
     const unreadCount = (notifications || []).filter((n) => !n.read).length
 
+    const enrichedNotifications = (notifications || []).map((notification) =>
+      enrichNotification(notification, "driver")
+    )
+
     return NextResponse.json({
-      notifications: notifications || [],
+      notifications: enrichedNotifications,
       unreadCount,
     })
   } catch (error) {
