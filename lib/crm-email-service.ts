@@ -33,27 +33,39 @@ function boolEnv(name: string, fallback = true) {
   return value === "true" || value === "1" || value === "yes"
 }
 
-function imapClient() {
+function uniqueValues(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)))
+}
+
+function imapPasswords() {
+  return uniqueValues([env("CRM_EMAIL_IMAP_PASSWORD"), env("CRM_EMAIL_IMAP_FALLBACK_PASSWORD")])
+}
+
+function smtpPasswords() {
+  return uniqueValues([env("CRM_EMAIL_SMTP_PASSWORD"), env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD")])
+}
+
+function imapClient(password = env("CRM_EMAIL_IMAP_PASSWORD")) {
   return new ImapFlow({
     host: env("CRM_EMAIL_IMAP_HOST", "imap.privateemail.com"),
     port: Number(env("CRM_EMAIL_IMAP_PORT", "993")),
     secure: boolEnv("CRM_EMAIL_USE_SSL", true),
     auth: {
       user: env("CRM_EMAIL_IMAP_USER", "support@charterkeke.com"),
-      pass: env("CRM_EMAIL_IMAP_PASSWORD"),
+      pass: password,
     },
     logger: false,
   })
 }
 
-function smtpTransport() {
+function smtpTransport(password = env("CRM_EMAIL_SMTP_PASSWORD")) {
   return nodemailer.createTransport({
     host: env("CRM_EMAIL_SMTP_HOST", "smtp.privateemail.com"),
     port: Number(env("CRM_EMAIL_SMTP_PORT", "465")),
     secure: boolEnv("CRM_EMAIL_USE_SSL", true),
     auth: {
       user: env("CRM_EMAIL_SMTP_USER", "support@charterkeke.com"),
-      pass: env("CRM_EMAIL_SMTP_PASSWORD"),
+      pass: password,
     },
   })
 }
@@ -315,30 +327,32 @@ async function persistInboundMessage(message: ParsedMessage) {
     throw messageInsertError
   }
 
-  await supabaseAdmin
-    .from("crm_email_messages")
-    .insert({
-      email_account_id: emailAccountId,
-      ticket_id: ticketId,
-      direction: "outbound",
-      from_email: recipientEmail,
-      from_name: "Charter Keke Support",
-      to_emails: [message.fromEmail],
-      cc_emails: [],
-      bcc_emails: [],
-      subject: `Ticket Received - ${ticketId}`,
-      body_text: `Hello ${message.fromName || "there"}, your message has been received and assigned ticket ${ticketId}.`,
-      body_html: null,
-      attachments: [],
-      external_message_id: null,
-      external_thread_id: message.threadId,
-      processing_status: "queued",
-      processing_reason: "Queued acknowledgment for SMTP delivery",
-      raw_headers: {},
-      raw_payload: {},
-      received_at: new Date().toISOString(),
-      processed_at: null,
-    })
+  if (boolEnv("CRM_EMAIL_AUTOREPLY_ENABLED", true)) {
+    await supabaseAdmin
+      .from("crm_email_messages")
+      .insert({
+        email_account_id: emailAccountId,
+        ticket_id: ticketId,
+        direction: "outbound",
+        from_email: env("CRM_EMAIL_AUTOREPLY_FROM", recipientEmail),
+        from_name: "Charter Keke Support",
+        to_emails: [message.fromEmail],
+        cc_emails: [],
+        bcc_emails: [],
+        subject: `Ticket Received - ${ticketId}`,
+        body_text: `Hello ${message.fromName || "there"}, your message has been received and assigned ticket ${ticketId}.`,
+        body_html: null,
+        attachments: [],
+        external_message_id: null,
+        external_thread_id: message.threadId,
+        processing_status: "queued",
+        processing_reason: "Queued acknowledgment for SMTP delivery",
+        raw_headers: {},
+        raw_payload: {},
+        received_at: new Date().toISOString(),
+        processed_at: null,
+      })
+  }
 
   await supabaseAdmin
     .from("support_tickets")
@@ -365,13 +379,21 @@ export async function syncInboxNow(limit = 20) {
     throw new Error("Supabase admin client unavailable")
   }
 
-  const client = imapClient()
+  const passwords = imapPasswords()
+  let client = imapClient(passwords[0])
   const synced: Array<Record<string, unknown>> = []
   const skipped: Array<Record<string, unknown>> = []
   const failed: Array<Record<string, unknown>> = []
 
   try {
-    await client.connect()
+    try {
+      await client.connect()
+    } catch (error) {
+      if (passwords.length < 2) throw error
+      await client.logout().catch(() => undefined)
+      client = imapClient(passwords[1])
+      await client.connect()
+    }
     const lock = await client.getMailboxLock("INBOX")
     try {
       const status = await client.status("INBOX", { uidNext: true, messages: true })
@@ -417,7 +439,15 @@ export async function processOutboundQueue(limit = 20) {
     throw new Error("Supabase admin client unavailable")
   }
 
-  const transporter = smtpTransport()
+  const passwords = smtpPasswords()
+  let transporter = smtpTransport(passwords[0])
+  if (passwords.length > 1) {
+    try {
+      await transporter.verify()
+    } catch {
+      transporter = smtpTransport(passwords[1])
+    }
+  }
 
   const { data: queued, error } = await supabaseAdmin
     .from("crm_email_messages")
