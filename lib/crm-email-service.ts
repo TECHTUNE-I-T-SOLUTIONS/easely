@@ -398,6 +398,18 @@ export async function syncInboxNow(limit = 20) {
     try {
       const status = await client.status("INBOX", { uidNext: true, messages: true })
       const end = Number(status.messages || 0)
+      if (end <= 0) {
+        return {
+          syncedCount: 0,
+          skippedCount: 0,
+          failedCount: 0,
+          synced,
+          skipped,
+          failed,
+          message: "Mailbox is empty",
+        }
+      }
+
       const start = Math.max(1, end - limit + 1)
 
       for await (const message of client.fetch(`${start}:${end}`, { uid: true, source: true })) {
