@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { uploadFileWithServiceRole } from "@/lib/upload-file";
+import { sendWelcomeEmail } from "@/lib/welcome-email";
 
 function errorResponse(status: number, error: string, meta?: Record<string, unknown>) {
   return NextResponse.json(
@@ -335,6 +336,21 @@ export async function POST(request: NextRequest) {
         console.error("Admin record creation error:", adminError);
       }
     }
+
+    sendWelcomeEmail({
+      id: newUser.id,
+      firstName,
+      lastName,
+      email,
+      phone,
+      role,
+      referralCode,
+      plateNumber: plateNumber || null,
+      vehicleType: vehicleType || null,
+      operatingZones: operatingZones || null,
+    }).catch((emailError) => {
+      console.error("Welcome email send failed:", emailError);
+    });
 
     return NextResponse.json(
       {

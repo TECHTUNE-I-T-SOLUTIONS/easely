@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
-import { Resend } from "resend";
-
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+import { sendWelcomeEmail } from "@/lib/welcome-email";
 
 export async function POST(request: NextRequest) {
   try {
@@ -106,20 +104,14 @@ export async function POST(request: NextRequest) {
       },
     ]);
 
-    // Send verification email (if Resend API key is configured)
-    if (resend) {
-      await resend.emails.send({
-        from: "noreply@charterkeke.com",
-        to: email,
-        subject: "Verify your Charter Keke account",
-        html: `
-          <h1>Welcome to Charter Keke!</h1>
-          <p>Hi ${first_name},</p>
-          <p>Thank you for signing up. Please complete your profile to start using Charter Keke.</p>
-          <p><a href="${process.env.NEXTAUTH_URL}/auth/complete-profile?userId=${user.id}">Complete Profile</a></p>
-        `,
-      });
-    }
+    sendWelcomeEmail({
+      id: user.id,
+      firstName: first_name,
+      lastName: last_name,
+      email,
+      phone: phone_number,
+      role: role || "user",
+    }).catch((emailError) => console.error("Welcome email send failed:", emailError));
 
     return NextResponse.json(
       {

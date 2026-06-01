@@ -1,6 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { sendSMS } from "@/lib/termii";
+import nodemailer from "nodemailer";
+
+function env(name: string, fallback = "") {
+  return process.env[name] || fallback;
+}
+
+function smtpTransport() {
+  return nodemailer.createTransport({
+    host: env("CRM_EMAIL_SMTP_HOST", "smtp.privateemail.com"),
+    port: Number(env("CRM_EMAIL_SMTP_PORT", "465")),
+    secure: (env("CRM_EMAIL_USE_SSL", "true") || "true").toLowerCase() !== "false",
+    auth: {
+      user: env("CRM_EMAIL_SMTP_USER", "support@charterkeke.com"),
+      pass: env("CRM_EMAIL_SMTP_PASSWORD") || env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD"),
+    },
+  });
+}
+
+async function sendEmailOTP(to: string, code: string, type: string) {
+  if (!to || (!env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD"))) return;
+  const purpose = type === "resume_session" ? "resume your session" : type === "forgot_password" ? "reset your password" : "verify your account";
+  await smtpTransport().sendMail({
+    from: env("CRM_EMAIL_AUTOREPLY_FROM", "Charter Keke <support@charterkeke.com>"),
+    to,
+    subject: `Your Charter Keke OTP: ${code}`,
+    text: `Your Charter Keke OTP is ${code}. Use it to ${purpose}. It is valid for 10 minutes. Do not share it with anyone.`,
+    html: `
+      <div style="font-family:Arial,Helvetica,sans-serif;background:#f7f3ed;padding:24px">
+        <div style="max-width:560px;margin:auto;background:#fff;border:1px solid #f0ddc5;border-radius:16px;overflow:hidden">
+          <div style="background:#f5820b;padding:22px;color:#111827">
+            <div style="font-weight:900;letter-spacing:.14em;text-transform:uppercase;font-size:12px">Charter Keke</div>
+            <h1 style="margin:8px 0 0;font-size:24px">Your verification code</h1>
+          </div>
+          <div style="padding:24px;color:#111827">
+            <p style="margin:0 0 14px;line-height:1.6">Use this code to ${purpose}. It expires in 10 minutes.</p>
+            <div style="font-size:34px;font-weight:900;letter-spacing:8px;background:#111827;color:#f5820b;text-align:center;border-radius:12px;padding:18px">${code}</div>
+            <p style="margin:18px 0 0;color:#6b7280;font-size:13px;line-height:1.6">If you did not request this code, you can safely ignore this email.</p>
+          </div>
+        </div>
+      </div>
+    `,
+  });
+}
 
 /**
  * POST /api/otp/request
@@ -16,6 +59,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { phone_number, email, type, user_id } = body;
+    const deliveryMethod = String(body.deliveryMethod || body.method || body.channel || "sms").toLowerCase();
 
     console.log(`📱 [OTP-REQUEST] Type: ${type}, Phone: ${phone_number || 'N/A'}, Email: ${email || 'N/A'}`);
 
@@ -151,30 +195,38 @@ export async function POST(request: NextRequest) {
 
     console.log(`✅ [OTP-REQUEST] OTP saved to database, ID: ${newOTP.id}`);
 
-    // Send OTP via SMS
-    try {
-      const smsMessage = `Your Charter Keke OTP is: ${otpCode}\n\nValid for 10 minutes.\nDo not share this code with anyone.`;
-      
-      await sendSMS({
-        to: targetPhone,
-        message: smsMessage,
-        channel: "generic",
-      });
+    if (deliveryMethod === "email") {
+      try {
+        await sendEmailOTP(targetEmail, otpCode, type);
+        console.log(`[OTP-REQUEST] Email OTP sent successfully to: ${targetEmail}`);
+      } catch (emailError) {
+        console.error(`[OTP-REQUEST] Email OTP sending failed, but OTP saved:`, emailError);
+      }
+    } else {
+      try {
+        const smsMessage = `Your Charter Keke OTP is: ${otpCode}\n\nValid for 10 minutes.\nDo not share this code with anyone.`;
+        
+        await sendSMS({
+          to: targetPhone,
+          message: smsMessage,
+          channel: "generic",
+        });
 
-      console.log(`📱 [OTP-REQUEST] SMS sent successfully to: ${targetPhone}`);
-    } catch (smsError) {
-      console.error(`⚠️  [OTP-REQUEST] SMS sending failed, but OTP saved:`, smsError);
-      // We saved the OTP but couldn't send SMS - still return success
-      // The user can view the OTP in logs for testing
+        console.log(`📱 [OTP-REQUEST] SMS sent successfully to: ${targetPhone}`);
+      } catch (smsError) {
+        console.error(`⚠️  [OTP-REQUEST] SMS sending failed, but OTP saved:`, smsError);
+      }
     }
 
     return NextResponse.json(
       {
         success: true,
-        message: "OTP sent successfully",
+        message: deliveryMethod === "email" ? "OTP sent to your email" : "OTP sent successfully",
         otpId: newOTP.id,
         expiresIn: 600, // 10 minutes in seconds
         phone: targetPhone,
+        email: targetEmail,
+        deliveryMethod,
         // In development, return OTP for testing
         ...(process.env.NODE_ENV === "development" && { otp: otpCode }),
       },
