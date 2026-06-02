@@ -2,6 +2,7 @@ import { supabaseAdmin } from "@/lib/supabase"
 import { emitRideAccepted, emitRideTaken } from "@/lib/push-emitters"
 import { sendRideAcceptanceSMS } from "@/lib/termii"
 import { cancelExpiredOpenRides } from "@/lib/ride-expiry"
+import { sendRideReceiptEmail } from "@/lib/ride-receipt-email"
 
 export type RideAcceptanceSource = "app" | "sms"
 
@@ -35,7 +36,7 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
     // Get driver profile
     const { data: driver, error: driverError } = await supabaseAdmin
       .from("drivers")
-      .select("id, user_id")
+      .select("id, user_id, vehicle_type, plate_number")
       .eq("user_id", input.driverUserId)
       .single()
 
@@ -58,7 +59,7 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
         success: false,
         status: 410,
         code: "ride_expired",
-        message: "This ride expired at the end of its scheduled booking day and has been cancelled.",
+        message: "This ride expired because no driver accepted it before the scheduled day ended and has been cancelled.",
       }
     }
 
@@ -127,7 +128,7 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
     // Get driver user details for notifications
     const { data: driverUser } = await supabaseAdmin
       .from("users")
-      .select("first_name, last_name, phone_number")
+      .select("first_name, last_name, phone_number, email")
       .eq("id", input.driverUserId)
       .single()
 
@@ -170,7 +171,7 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
       // Get rider details for SMS
       const { data: riderUser } = await supabaseAdmin
         .from("users")
-        .select("first_name, phone_number")
+        .select("first_name, last_name, phone_number, email")
         .eq("id", updatedRide.rider_id)
         .single()
 
@@ -223,6 +224,27 @@ Get ready for pickup!`
       }
 
       await Promise.allSettled(smsTasks)
+
+      const emailRide = {
+        ...updatedRide,
+        rider: riderUser,
+        driver,
+        driverUser,
+      }
+      const emailTasks = []
+      if (riderUser?.email) {
+        emailTasks.push(
+          sendRideReceiptEmail({ to: riderUser.email, ride: emailRide, audience: "rider" })
+            .catch((error) => console.error("[RideAcceptance] Failed to email rider receipt:", error))
+        )
+      }
+      if (driverUser?.email) {
+        emailTasks.push(
+          sendRideReceiptEmail({ to: driverUser.email, ride: emailRide, audience: "driver" })
+            .catch((error) => console.error("[RideAcceptance] Failed to email driver receipt:", error))
+        )
+      }
+      await Promise.allSettled(emailTasks)
     } catch (notificationError) {
       console.error("[RideAcceptance] notification error:", notificationError)
     }

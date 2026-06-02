@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
       await cancelExpiredOpenRides([rideId])
       return NextResponse.json(
         {
-          error: "This ride expired at the end of its scheduled booking day and has been cancelled.",
+          error: "This ride already passed its scheduled day and has been resolved.",
           code: "ride_expired",
         },
         { status: 410 }

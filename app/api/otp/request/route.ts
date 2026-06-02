@@ -22,24 +22,47 @@ function smtpTransport() {
 async function sendEmailOTP(to: string, code: string, type: string) {
   if (!to || (!env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD"))) return;
   const purpose = type === "resume_session" ? "resume your session" : type === "forgot_password" ? "reset your password" : "verify your account";
+  const logoUrl = "https://admin.charterkeke.com/charter%20keke.png";
   await smtpTransport().sendMail({
     from: env("CRM_EMAIL_AUTOREPLY_FROM", "Charter Keke <support@charterkeke.com>"),
     to,
-    subject: `Your Charter Keke OTP: ${code}`,
+    subject: `Your Charter Keke verification code`,
     text: `Your Charter Keke OTP is ${code}. Use it to ${purpose}. It is valid for 10 minutes. Do not share it with anyone.`,
     html: `
-      <div style="font-family:Arial,Helvetica,sans-serif;background:#f7f3ed;padding:24px">
-        <div style="max-width:560px;margin:auto;background:#fff;border:1px solid #f0ddc5;border-radius:16px;overflow:hidden">
-          <div style="background:#f5820b;padding:22px;color:#111827">
-            <div style="font-weight:900;letter-spacing:.14em;text-transform:uppercase;font-size:12px">Charter Keke</div>
-            <h1 style="margin:8px 0 0;font-size:24px">Your verification code</h1>
-          </div>
-          <div style="padding:24px;color:#111827">
-            <p style="margin:0 0 14px;line-height:1.6">Use this code to ${purpose}. It expires in 10 minutes.</p>
-            <div style="font-size:34px;font-weight:900;letter-spacing:8px;background:#111827;color:#f5820b;text-align:center;border-radius:12px;padding:18px">${code}</div>
-            <p style="margin:18px 0 0;color:#6b7280;font-size:13px;line-height:1.6">If you did not request this code, you can safely ignore this email.</p>
-          </div>
-        </div>
+      <div style="margin:0;padding:0;background:#f6f2ec;font-family:Arial,Helvetica,sans-serif;color:#171717">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f2ec;padding:28px 12px">
+          <tr>
+            <td align="center">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #f0dec8;border-radius:22px;overflow:hidden;box-shadow:0 18px 50px rgba(24,24,27,.08)">
+                <tr>
+                  <td style="background:#ff8a00;padding:26px 28px;color:#111111">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="vertical-align:middle">
+                          <img src="${logoUrl}" width="54" height="54" alt="Charter Keke" style="display:block;border-radius:14px;border:1px solid rgba(0,0,0,.12)" />
+                        </td>
+                        <td style="vertical-align:middle;padding-left:14px">
+                          <div style="font-size:12px;font-weight:900;letter-spacing:.18em;text-transform:uppercase">Charter Keke</div>
+                          <div style="font-size:24px;line-height:1.25;font-weight:900;margin-top:3px">Verification code</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:30px 28px">
+                    <p style="margin:0 0 16px;font-size:16px;line-height:1.65;color:#333333">Use this code to ${purpose}. It expires in <strong>10 minutes</strong>.</p>
+                    <div style="background:#111111;border-radius:18px;padding:22px;text-align:center">
+                      <div style="font-size:38px;line-height:1;font-weight:900;letter-spacing:10px;color:#ff8a00">${code}</div>
+                    </div>
+                    <p style="margin:18px 0 0;font-size:14px;line-height:1.6;color:#6b7280">For your security, do not share this code with anyone. Charter Keke support will never ask you to reveal it.</p>
+                    <p style="margin:14px 0 0;font-size:13px;line-height:1.6;color:#8a8a8a">If you did not request this email, you can safely ignore it.</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
       </div>
     `,
   });
