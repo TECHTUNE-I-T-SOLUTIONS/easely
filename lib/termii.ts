@@ -26,6 +26,7 @@ interface RideRequestSMSOptions {
   rideId: string
   pickup: string
   destination: string
+  pickupTime?: string | Date | null
   fare: number
 }
 
@@ -149,17 +150,21 @@ export async function sendSMS(options: TermiiSendSMSOptions) {
 
 export async function sendRideRequestSMS(options: RideRequestSMSOptions) {
   const shortRideRef = options.rideId.slice(0, 8).toUpperCase()
-  const message = `🚗 CHARTER KEKE RIDE REQUEST
+  const pickupTime = formatRidePickupTime(options.pickupTime)
+  const message = `CHARTER KEKE RIDE REQUEST
   
 New ride: CK-${shortRideRef}
 From: ${options.pickup}
 To: ${options.destination}
+Pickup time: ${pickupTime}
 Fare: ₦${Math.round(options.fare || 0)}
 
-📱 TO ACCEPT THIS RIDE:
-Reply: ACCEPT ${options.rideId}
+TO ACCEPT THIS RIDE:
+1. Accept the ride in your driver app as soon as possible.
+2. Accept via the email sent to you (check spam folder if not in inbox).
+3. Accept it in the notification sent to your phone.
 
-Ride expires in 5 minutes.`
+Open requests expire at the end of the scheduled pickup day.`
 
   // Try DND first (transactional), fallback to generic automatically via sendSMS
   return sendSMS({
@@ -168,6 +173,24 @@ Ride expires in 5 minutes.`
     channel: "dnd",
     type: "plain",
   })
+}
+
+function formatRidePickupTime(value?: string | Date | null) {
+  if (!value) return "ASAP"
+
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+
+  return new Intl.DateTimeFormat("en-NG", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Africa/Lagos",
+  }).format(date)
 }
 
 export async function sendOTP(options: TermiiSendOTPOptions) {
@@ -246,13 +269,13 @@ export async function sendBulkSMS(phoneNumbers: string[], message: string, chann
 }
 
 export async function sendRideAcceptanceSMS(driverPhone: string, rideId: string, riderName?: string) {
-  const message = `✅ RIDE ACCEPTED - CK-${rideId.slice(0, 8).toUpperCase()}
+  const message = `RIDE ACCEPTED - CK-${rideId.slice(0, 8).toUpperCase()}
 
 You have accepted the ride.
 ${riderName ? `Rider: ${riderName}` : ""}
 
-📍 You will receive pickup location soon.
-🔔 Watch for updates from Charter Keke.
+You will receive pickup location soon.
+Watch for updates from Charter Keke.
 
 Safe travels!`
 
@@ -266,21 +289,21 @@ Safe travels!`
 
 export async function sendRideStatusUpdateSMS(driverPhone: string, rideId: string, status: string, message?: string) {
   const defaultMessages: Record<string, string> = {
-    "in_progress": `🚗 TRIP STARTED - CK-${rideId.slice(0, 8).toUpperCase()}
+    "in_progress": `TRIP STARTED - CK-${rideId.slice(0, 8).toUpperCase()}
 
 Your trip has begun. 
 Start driving safely to the pickup location.
 
-🔔 Follow navigation directions.`,
-    "completed": `✅ TRIP COMPLETED - CK-${rideId.slice(0, 8).toUpperCase()}
+Follow navigation directions.`,
+    "completed": `TRIP COMPLETED - CK-${rideId.slice(0, 8).toUpperCase()}
 
 Excellent work! Trip completed successfully.
 
-💰 Check your wallet for fare deposit.
-⭐ Rider may rate your service soon.
+The Passenger will pay to you directly.
+Rider may rate your service soon.
 
 Thank you for driving with Charter Keke!`,
-    "cancelled": `❌ RIDE CANCELLED - CK-${rideId.slice(0, 8).toUpperCase()}
+    "cancelled": `RIDE CANCELLED - CK-${rideId.slice(0, 8).toUpperCase()}
 
 Unfortunately, this ride has been cancelled.
 

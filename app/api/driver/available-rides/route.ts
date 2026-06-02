@@ -29,7 +29,8 @@ export async function GET(request: NextRequest) {
       console.error("Available rides expiry cleanup error:", expiryError);
     });
 
-    // Get available rides (pending status, not yet accepted by any driver)
+    // Get available rides awaiting acceptance. New bookings may become
+    // dispatched after driver notifications are sent, but they are still open.
     const { data: rides, error } = await supabase
       .from("rides")
       .select(`
@@ -47,7 +48,8 @@ export async function GET(request: NextRequest) {
         pickup_time,
         created_at
       `)
-      .eq("status", "pending")
+      .in("status", ["pending", "dispatched"])
+      .is("driver_id", null)
       .gte("pickup_time", new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
       .order("created_at", { ascending: false })
       .limit(20);

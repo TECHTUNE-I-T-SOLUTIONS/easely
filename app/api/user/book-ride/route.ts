@@ -260,6 +260,7 @@ export async function POST(request: NextRequest) {
               rideId: ride.id,
               pickup: pickupZone,
               destination: destinationZone,
+              pickupTime: ride.pickup_time || parsedPickupTime,
               fare: Number(final_fare_amount || 0),
             })
               .then(() => {
@@ -435,6 +436,7 @@ export async function POST(request: NextRequest) {
               rideId: ride.id,
               pickup: pickupZone,
               destination: destinationZone,
+              pickupTime: ride.pickup_time || parsedPickupTime,
               fare: Number(final_fare_amount || 0),
             })
               .then(() => {

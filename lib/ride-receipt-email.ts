@@ -1,5 +1,4 @@
 import nodemailer from "nodemailer"
-import PDFDocument from "pdfkit"
 
 function env(name: string, fallback = "") {
   return process.env[name] || fallback
@@ -150,20 +149,6 @@ export function renderRideReceiptSvg(ride: any, audience: "rider" | "driver") {
 
 export async function renderRideReceiptPdfBuffer(ride: any, audience: "rider" | "driver") {
   const data = normalize(ride, audience)
-  const document = new PDFDocument({ size: "A4", margin: 44 })
-  const chunks: Buffer[] = []
-  document.on("data", (chunk) => chunks.push(Buffer.from(chunk)))
-  const done = new Promise<Buffer>((resolve) => {
-    document.on("end", () => resolve(Buffer.concat(chunks)))
-  })
-
-  document.rect(0, 0, document.page.width, 160).fill("#111111")
-  document.fillColor("#ff8a00").fontSize(12).text("CHARTER KEKE", 44, 42, { characterSpacing: 2 })
-  document.fillColor("#ffffff").fontSize(30).text(audience === "driver" ? "Driver Ride Sheet" : "Ride Receipt", 44, 66)
-  document.fillColor("#ffffff").fontSize(12).text(`${data.number} - ${data.status}`, 44, 112)
-
-  document.fillColor("#171717").fontSize(12)
-  let y = 205
   const rows = [
     ["Created", data.createdAt],
     ["Pickup", data.pickup],
@@ -175,18 +160,81 @@ export async function renderRideReceiptPdfBuffer(ride: any, audience: "rider" | 
     [audience === "driver" ? "Driver earning" : "Total payable", money(data.total)],
   ]
 
-  rows.forEach(([label, value]) => {
-    document.fillColor("#7c5b37").fontSize(9).text(label.toUpperCase(), 44, y)
-    document.fillColor(label.includes("earning") || label.includes("payable") ? "#ff8a00" : "#171717")
-      .fontSize(label.includes("earning") || label.includes("payable") ? 22 : 14)
-      .text(value, 44, y + 16, { width: 500 })
-    y += 58
+  return renderSimplePdf({
+    title: audience === "driver" ? "Driver Ride Sheet" : "Ride Receipt",
+    subtitle: `${data.number} - ${data.status}`,
+    rows,
   })
+}
 
-  document.rect(0, document.page.height - 70, document.page.width, 70).fill("#ff8a00")
-  document.fillColor("#111111").fontSize(12).text("Affordable Keke rides in Lagos", 44, document.page.height - 42)
-  document.end()
-  return done
+function escapePdfText(value: unknown) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/\r?\n/g, " ")
+}
+
+function renderSimplePdf({
+  title,
+  subtitle,
+  rows,
+}: {
+  title: string
+  subtitle: string
+  rows: string[][]
+}) {
+  const lines: string[] = [
+    "q",
+    "0 0 0 rg",
+    "0 682 595 160 re f",
+    "1 0.54 0 rg",
+    "BT /F1 12 Tf 44 790 Td (CHARTER KEKE) Tj ET",
+    "1 1 1 rg",
+    `BT /F1 30 Tf 44 754 Td (${escapePdfText(title)}) Tj ET`,
+    `BT /F1 12 Tf 44 712 Td (${escapePdfText(subtitle)}) Tj ET`,
+    "0.09 0.09 0.09 rg",
+  ]
+
+  let y = 635
+  for (const [label, value] of rows) {
+    const isTotal = /earning|payable/i.test(label)
+    lines.push("0.49 0.36 0.22 rg")
+    lines.push(`BT /F1 9 Tf 44 ${y} Td (${escapePdfText(label.toUpperCase())}) Tj ET`)
+    lines.push(isTotal ? "1 0.54 0 rg" : "0.09 0.09 0.09 rg")
+    lines.push(`BT /F1 ${isTotal ? 22 : 14} Tf 44 ${y - 20} Td (${escapePdfText(value).slice(0, 90)}) Tj ET`)
+    y -= 58
+  }
+
+  lines.push("1 0.54 0 rg")
+  lines.push("0 0 595 70 re f")
+  lines.push("0 0 0 rg")
+  lines.push("BT /F1 12 Tf 44 32 Td (Affordable Keke rides in Lagos) Tj ET")
+  lines.push("Q")
+
+  const stream = lines.join("\n")
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n${stream}\nendstream`,
+  ]
+
+  let pdf = "%PDF-1.4\n"
+  const offsets = [0]
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(pdf, "utf8"))
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`
+  })
+  const xrefOffset = Buffer.byteLength(pdf, "utf8")
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  for (let index = 1; index <= objects.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+
+  return Buffer.from(pdf, "utf8")
 }
 
 export async function sendRideReceiptEmail({

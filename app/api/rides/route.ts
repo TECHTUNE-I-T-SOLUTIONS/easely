@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
       pickup_description,
       destination_zone,
       destination_description,
+      pickup_time,
       ride_type = "single",
       fare,
       estimated_distance,
@@ -193,6 +194,7 @@ export async function POST(request: NextRequest) {
               rideId: ride.id,
               pickup: pickup_description || pickup_zone,
               destination: destination_description || destination_zone,
+              pickupTime: (ride as any).pickup_time || pickup_time || (ride as any).created_at,
               fare: Number((ride as any).fare_amount || (ride as any).fare || parsedFare || 0),
             }).then(() =>
               supabaseAdmin!.from("ride_dispatch_logs").insert([

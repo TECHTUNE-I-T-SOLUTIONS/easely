@@ -19,6 +19,7 @@ import { sendSMS, sendRideRequestSMS, toTermiiPhoneNumber } from "@/lib/termii"
  *   "rideId": "550e8400-e29b-41d4-a716-446655440000",
  *   "pickup": "Lekki Phase 1",
  *   "destination": "VI",
+ *   "pickupTime": "2026-06-02T14:20:00.000Z",
  *   "fare": 2500
  * }
  */
@@ -34,7 +35,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { testType, phone, message, rideId, pickup, destination, fare } = body
+    const { testType, phone, message, rideId, pickup, destination, pickupTime, fare } = body
 
     if (!phone) {
       return NextResponse.json(
@@ -92,6 +93,7 @@ export async function POST(request: NextRequest) {
         rideId,
         pickup,
         destination,
+        pickupTime,
         fare,
       })
 
@@ -100,6 +102,7 @@ export async function POST(request: NextRequest) {
         rideId,
         pickup,
         destination,
+        pickupTime,
         fare: Number(fare),
       })
     } else {
