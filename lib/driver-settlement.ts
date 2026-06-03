@@ -13,31 +13,23 @@ export interface DriverSettlementSummary {
 }
 
 export const PLATFORM_FEE_RATE = 0.15
+export const LAGOS_TIME_OFFSET_MS = 60 * 60 * 1000
 
-function startOfDay(date: Date) {
-  const copy = new Date(date)
-  copy.setHours(0, 0, 0, 0)
-  return copy
+export function getLagosDateString(date = new Date()) {
+  return new Date(date.getTime() + LAGOS_TIME_OFFSET_MS).toISOString().slice(0, 10)
 }
 
-function endOfDay(date: Date) {
-  const copy = new Date(date)
-  copy.setHours(23, 59, 59, 999)
-  return copy
+export function getLagosDayRange(dateString: string) {
+  const lagosMidnightAsUtc = new Date(`${dateString}T00:00:00.000Z`)
+  const start = new Date(lagosMidnightAsUtc.getTime() - LAGOS_TIME_OFFSET_MS)
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
+  return { start, end, dateString, dueDate: end }
 }
 
 export function getDateRangeForOffset(offsetDays: number) {
-  const target = new Date()
-  target.setDate(target.getDate() + offsetDays)
-  const start = startOfDay(target)
-  const end = new Date(start)
-  end.setDate(start.getDate() + 1)
-  return {
-    start,
-    end,
-    dateString: start.toISOString().slice(0, 10),
-    dueDate: end,
-  }
+  const todayInLagos = new Date(`${getLagosDateString()}T00:00:00.000Z`)
+  todayInLagos.setUTCDate(todayInLagos.getUTCDate() + offsetDays)
+  return getLagosDayRange(todayInLagos.toISOString().slice(0, 10))
 }
 
 export async function upsertSettlementForDate(driverId: string, dateString: string) {
@@ -45,10 +37,7 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
     throw new Error("Supabase admin client not initialized")
   }
 
-  const date = new Date(dateString)
-  const rangeStart = startOfDay(date)
-  const rangeEnd = new Date(rangeStart)
-  rangeEnd.setDate(rangeStart.getDate() + 1)
+  const { start: rangeStart, end: rangeEnd } = getLagosDayRange(dateString)
 
   // Query rides directly - these are rides the driver actually accepted/completed
   const { data: rides, error: ridesError } = await supabaseAdmin
@@ -190,7 +179,7 @@ export async function updateOverdueSettlements(driverId: string) {
     throw new Error("Supabase admin client not initialized")
   }
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getLagosDateString()
 
   await supabaseAdmin
     .from("driver_daily_settlement")
@@ -205,7 +194,7 @@ export async function getOutstandingSettlements(driverId: string) {
     throw new Error("Supabase admin client not initialized")
   }
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getLagosDateString()
 
   const { data: settlements, error } = await supabaseAdmin
     .from("driver_daily_settlement")

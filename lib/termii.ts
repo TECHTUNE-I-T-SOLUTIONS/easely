@@ -159,6 +159,8 @@ To: ${options.destination}
 Pickup time: ${pickupTime}
 Fare: ₦${Math.round(options.fare || 0)}
 
+Open in app: charterkeke:///driver/ride-details?rideId=${options.rideId}
+
 TO ACCEPT THIS RIDE:
 1. Accept the ride in your driver app as soon as possible.
 2. Accept via the email sent to you (check spam folder if not in inbox).
@@ -268,11 +270,14 @@ export async function sendBulkSMS(phoneNumbers: string[], message: string, chann
   }
 }
 
-export async function sendRideAcceptanceSMS(driverPhone: string, rideId: string, riderName?: string) {
+export async function sendRideAcceptanceSMS(driverPhone: string, rideId: string, riderName?: string, pickupTime?: string | Date | null) {
+  const formattedPickupTime = formatRidePickupTime(pickupTime)
   const message = `RIDE ACCEPTED - CK-${rideId.slice(0, 8).toUpperCase()}
 
 You have accepted the ride.
 ${riderName ? `Rider: ${riderName}` : ""}
+Pickup time: ${formattedPickupTime}
+Open in app: charterkeke:///driver/ride-details?rideId=${rideId}
 
 You will receive pickup location soon.
 Watch for updates from Charter Keke.

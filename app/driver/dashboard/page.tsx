@@ -13,9 +13,24 @@ import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CharterKeKeMap } from "@/components/easely-map"
-import { Car, Wallet, Star, Clock, Users, Navigation, AlertCircle, Loader, MapPin } from "lucide-react"
+import { Car, Wallet, Star, Clock, Users, Navigation, AlertCircle, Loader, MapPin, CreditCard, ShieldAlert } from "lucide-react"
 import Link from "next/link"
 import { toast } from "sonner"
+
+function money(value: number | string | null | undefined) {
+  return `₦${Number(value || 0).toLocaleString("en-NG", { maximumFractionDigits: 0 })}`
+}
+
+function formatCountdown(ms: number) {
+  const safe = Math.max(Number(ms || 0), 0)
+  const hours = Math.floor(safe / 3_600_000)
+  const minutes = Math.floor((safe % 3_600_000) / 60_000)
+  const seconds = Math.floor((safe % 60_000) / 1000)
+
+  if (hours <= 0 && minutes <= 0 && seconds <= 0) return "due now"
+  if (hours <= 0) return `${minutes}m ${seconds}s`
+  return `${hours}h ${minutes}m ${seconds}s`
+}
 
 function DriverDashboardContent() {
   const { data: session } = useSession()
@@ -24,6 +39,10 @@ function DriverDashboardContent() {
   const [loading, setLoading] = useState(true)
   const [driverData, setDriverData] = useState<any>(null)
   const [activeRides, setActiveRides] = useState<any[]>([])
+  const [statusData, setStatusData] = useState<any>(null)
+  const [settlementStatus, setSettlementStatus] = useState<any>(null)
+  const [dailySettlement, setDailySettlement] = useState<any>(null)
+  const [now, setNow] = useState(Date.now())
   const [mapMarkers, setMapMarkers] = useState<any[]>([])
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
 
@@ -56,7 +75,23 @@ function DriverDashboardContent() {
 
         setDriverData(detailsData.driver)
         setActiveRides(ridesData.rides || [])
+        setStatusData(statusData)
         setIsOnline(statusData.status === "online")
+
+        const [settlementRes, dailyRes] = await Promise.allSettled([
+          fetch("/api/driver/settlement/status"),
+          fetch("/api/driver/settlement/daily"),
+        ])
+
+        if (settlementRes.status === "fulfilled") {
+          const data = await settlementRes.value.json()
+          if (settlementRes.value.ok) setSettlementStatus(data)
+        }
+
+        if (dailyRes.status === "fulfilled") {
+          const data = await dailyRes.value.json()
+          if (dailyRes.value.ok) setDailySettlement(data)
+        }
 
         // Create map markers from active rides
         const markers: any[] = []
@@ -102,6 +137,11 @@ function DriverDashboardContent() {
     fetchData()
   }, [user?.id])
 
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
   const handleOnlineToggle = (checked: boolean) => {
     setIsOnline(checked)
     fetch("/api/driver/status", {
@@ -111,7 +151,17 @@ function DriverDashboardContent() {
         status: checked ? "online" : "offline",
       }),
     })
-      .then(() => {
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(data?.error || "Failed to update status")
+        }
+        setStatusData((current: any) => ({
+          ...(current || {}),
+          status: data.status,
+          updatedAt: data.updatedAt,
+          blocked: checked ? false : current?.blocked,
+        }))
         if (checked) {
           toast.success("You're now online!", {
             description: "You'll start receiving ride requests from Lagos riders.",
@@ -122,16 +172,49 @@ function DriverDashboardContent() {
           })
         }
       })
-      .catch(() => {
+      .catch((error) => {
         setIsOnline(!checked)
-        toast.error("Failed to update status")
+        toast.error(error instanceof Error ? error.message : "Failed to update status")
       })
   }
+
+  const initiateRemittancePayment = async (date?: string) => {
+    try {
+      const response = await fetch("/api/driver/settlement/initiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, includeToday: !date, returnUrl: `${window.location.origin}/driver/payments` }),
+      })
+      const data = await response.json()
+      if (!response.ok || !data?.authUrl) {
+        throw new Error(data?.error || "Unable to start remittance payment")
+      }
+      window.location.href = data.authUrl
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to start payment")
+    }
+  }
+
+  const todayDueAt = dailySettlement?.due?.dueAt || settlementStatus?.todayRemittance?.dueAt
+  const todayCountdownMs = todayDueAt
+    ? Math.max(new Date(todayDueAt).getTime() - now, 0)
+    : Number(dailySettlement?.due?.millisecondsRemaining || settlementStatus?.todayRemittance?.millisecondsRemaining || 0)
+  const todayUnremitted = Number(
+    dailySettlement?.totals?.unremittedPlatformFee ||
+      dailySettlement?.settlement?.outstandingPlatformFees ||
+      settlementStatus?.todayRemittance?.totalDue ||
+      0
+  )
+  const totalRemittanceDue = Number(
+    settlementStatus?.totalDueNow ??
+      (Number(settlementStatus?.totalOutstanding || 0) + todayUnremitted)
+  )
+  const todayDate = dailySettlement?.date || new Date().toISOString().slice(0, 10)
 
   const stats = [
     {
       label: "Today's Earnings",
-      value: `₦${driverData?.total_earnings || 0}`,
+      value: money(dailySettlement?.totals?.netDriverEarnings || driverData?.total_earnings || 0),
       icon: <Wallet className="h-5 w-5" />,
       color: "from-emerald-500 to-emerald-400",
     },
@@ -143,15 +226,15 @@ function DriverDashboardContent() {
     },
     {
       label: "Rating",
-      value: `${(driverData?.average_rating || 5.0).toFixed(1)}⭐`,
+      value: `${Number(driverData?.average_rating || 5.0).toFixed(1)}★`,
       icon: <Star className="h-5 w-5" />,
       color: "from-amber-500 to-amber-400",
     },
     {
-      label: "Active Rides",
-      value: `${activeRides.length}`,
-      icon: <Clock className="h-5 w-5" />,
-      color: "from-blue-500 to-blue-400",
+      label: "Remittance Due",
+      value: money(totalRemittanceDue),
+      icon: <CreditCard className="h-5 w-5" />,
+      color: "from-red-500 to-orange-400",
     },
   ]
 
@@ -252,6 +335,41 @@ function DriverDashboardContent() {
                     className="data-[state=checked]:bg-emerald-500"
                   />
                 </div>
+                {statusData?.blocked ? (
+                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm">
+                    <ShieldAlert className="mt-0.5 h-4 w-4 text-red-500" />
+                    <div>
+                      <p className="font-semibold text-red-600">
+                        Remittance due: ₦{Number(statusData.totalOutstanding || 0).toLocaleString("en-NG")}
+                      </p>
+                      <p className="text-muted-foreground">
+                        Pay your outstanding platform fee before going online.
+                      </p>
+                    </div>
+                  </div>
+                ) : todayUnremitted > 0 ? (
+                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/10 p-3 text-sm">
+                    <Clock className="mt-0.5 h-4 w-4 text-primary" />
+                    <div>
+                      <p className="font-semibold text-foreground">
+                        Remittance countdown: {formatCountdown(todayCountdownMs)}
+                      </p>
+                      <p className="text-muted-foreground">
+                        {money(todayUnremitted)} is due by midnight. Your status only locks after it becomes overdue.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm">
+                    <CreditCard className="mt-0.5 h-4 w-4 text-emerald-600" />
+                    <div>
+                      <p className="font-semibold text-emerald-700">No remittance due</p>
+                      <p className="text-muted-foreground">
+                        You can stay online or switch yourself offline anytime.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </Card>
             </motion.div>
           </motion.div>
@@ -282,6 +400,78 @@ function DriverDashboardContent() {
                 </CardContent>
               </Card>
             ))}
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.15 }}
+            className="grid grid-cols-1 lg:grid-cols-3 gap-4"
+          >
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <CreditCard className="h-5 w-5 text-primary" />
+                  Platform Remittance
+                </CardTitle>
+                <CardDescription>
+                  Synced with the mobile app. Remittance is calculated from accepted, in-progress, and completed rides.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Today's unremitted fee</p>
+                  <p className="mt-1 text-2xl font-bold">
+                    {money(todayUnremitted)}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Due in {formatCountdown(todayCountdownMs)}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Overdue lock amount</p>
+                  <p className="mt-1 text-2xl font-bold text-red-600">
+                    {money(settlementStatus?.totalOutstanding)}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Only overdue fees lock availability.
+                  </p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Accepted rides today</p>
+                  <p className="mt-1 text-2xl font-bold">
+                    {Number(dailySettlement?.totals?.acceptedRides || 0)}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Remittance Reminder</CardTitle>
+                <CardDescription>
+                  Today's remittance is due at midnight. Availability locks only after it becomes overdue.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  {settlementStatus?.blocked
+                    ? "You currently have overdue remittance. Pay now to unlock availability."
+                    : todayUnremitted > 0
+                      ? `You have ${money(todayUnremitted)} due today. Pay before midnight to avoid tomorrow's lock.`
+                      : "No remittance is due right now."}
+                </p>
+                <Button
+                  onClick={() => initiateRemittancePayment(settlementStatus?.blocked ? undefined : todayDate)}
+                  disabled={!totalRemittanceDue}
+                  className="w-full"
+                >
+                  {settlementStatus?.blocked ? "Pay Overdue Remittance" : "Pay Today's Remittance"}
+                </Button>
+                <Button asChild variant="outline" className="w-full">
+                  <Link href="/driver/payments">View remittance history</Link>
+                </Button>
+              </CardContent>
+            </Card>
           </motion.div>
 
           {/* Active Rides & Map */}

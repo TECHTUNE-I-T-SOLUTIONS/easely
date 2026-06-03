@@ -12,13 +12,16 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const rideId = searchParams.get('rideId');
+    const chatId = searchParams.get('chatId');
 
-    if (!rideId) {
-      return NextResponse.json({ error: "Ride ID required" }, { status: 400 });
+    if (!rideId && !chatId) {
+      return NextResponse.json({ error: "Ride ID or chat ID required" }, { status: 400 });
     }
 
-    // Get chat for this ride with participant details
-    const { data: chat, error: chatError } = await supabaseAdmin!
+    // Get chat for this ride/chat. If a ride has no dedicated chat yet, fall back
+    // to the existing participant conversation so repeat rider-driver messages
+    // stay in one thread.
+    let chatQuery = supabaseAdmin!
       .from("chats")
       .select(`
         id,
@@ -35,29 +38,78 @@ export async function GET(request: NextRequest) {
           pickup_zone,
           destination_zone
         )
-      `)
-      .eq('ride_id', rideId)
-      .single();
+      `);
+
+    chatQuery = chatId ? chatQuery.eq('id', chatId) : chatQuery.eq('ride_id', rideId);
+
+    const { data: chat, error: chatError } = await chatQuery.single();
+    let chatRecord: any = chat;
+
+    if (!chatRecord && rideId && chatError?.code === 'PGRST116') {
+      const { data: ride } = await supabaseAdmin!
+        .from("rides")
+        .select("id, rider_id, driver_id")
+        .eq("id", rideId)
+        .single();
+
+      let driverUserId = null;
+      if (ride?.driver_id) {
+        const { data: driverById } = await supabaseAdmin!
+          .from("drivers")
+          .select("user_id")
+          .eq("id", ride.driver_id)
+          .single();
+        driverUserId = driverById?.user_id || ride.driver_id;
+      }
+
+      if (ride?.rider_id && driverUserId) {
+        const { data: existingParticipantChat } = await supabaseAdmin!
+          .from("chats")
+          .select(`
+            id,
+            ride_id,
+            rider_id,
+            driver_id,
+            created_at,
+            updated_at,
+            rides (
+              id,
+              rider_id,
+              driver_id,
+              status,
+              pickup_zone,
+              destination_zone
+            )
+          `)
+          .eq("rider_id", ride.rider_id)
+          .eq("driver_id", driverUserId)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        chatRecord = existingParticipantChat;
+      }
+    }
 
     // Get rider and driver details separately
     let riderData = null;
     let driverData = null;
 
-    if (chat) {
-      if (chat.rider_id) {
+    if (chatRecord) {
+      if (chatRecord.rider_id) {
         const { data: rider } = await supabaseAdmin!
           .from("users")
           .select("id, first_name, last_name, profile_picture_url")
-          .eq("id", chat.rider_id)
+          .eq("id", chatRecord.rider_id)
           .single();
         riderData = rider;
       }
 
-      if (chat.driver_id) {
+      if (chatRecord.driver_id) {
         const { data: driver } = await supabaseAdmin!
           .from("users")
           .select("id, first_name, last_name, profile_picture_url")
-          .eq("id", chat.driver_id)
+          .eq("id", chatRecord.driver_id)
           .single();
         driverData = driver;
       }
@@ -69,8 +121,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Check if user is part of this ride
-    if (chat) {
-      const isParticipant = chat.rider_id === session.user.id || chat.driver_id === session.user.id;
+    if (chatRecord) {
+      const isParticipant = chatRecord.rider_id === session.user.id || chatRecord.driver_id === session.user.id;
       if (!isParticipant) {
         return NextResponse.json({ error: "Not authorized for this chat" }, { status: 403 });
       }
@@ -78,7 +130,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ 
       chat: {
-        ...chat,
+        ...chatRecord,
         rider: riderData,
         driver: driverData
       }
@@ -152,7 +204,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Chat only available for active rides" }, { status: 400 });
     }
 
-    // Check if chat already exists
+    // Check if chat already exists for this ride
     const { data: existingChat, error: existingError } = await supabaseAdmin!
       .from("chats")
       .select('id')
@@ -161,6 +213,23 @@ export async function POST(request: NextRequest) {
 
     if (existingChat) {
       return NextResponse.json({ chat: existingChat });
+    }
+
+    // Reuse the conversation between the same rider and driver instead of
+    // creating a new thread for every ride between the same people.
+    if (ride.rider_id && driverUserId) {
+      const { data: participantChat } = await supabaseAdmin!
+        .from("chats")
+        .select("id, ride_id, rider_id, driver_id, created_at, updated_at")
+        .eq("rider_id", ride.rider_id)
+        .eq("driver_id", driverUserId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (participantChat?.id) {
+        return NextResponse.json({ chat: participantChat });
+      }
     }
 
     // Verify both rider and driver (users) exist before creating chat

@@ -29,7 +29,9 @@ export async function GET(request: NextRequest) {
 
     await updateOverdueSettlements(driver.id)
 
+    const todayRange = getDateRangeForOffset(0)
     const { dateString } = getDateRangeForOffset(-1)
+    const todaySettlement = await upsertSettlementForDate(driver.id, todayRange.dateString)
     const settlement = await upsertSettlementForDate(driver.id, dateString)
 
     const outstanding = await getOutstandingSettlements(driver.id)
@@ -39,6 +41,22 @@ export async function GET(request: NextRequest) {
     )
 
     const blocked = totalOutstanding > 0
+    const { data: todayRides } = await supabaseAdmin!
+      .from("rides")
+      .select("id, platform_fee, remitted")
+      .eq("driver_id", driver.id)
+      .in("status", ["accepted", "in_progress", "completed"])
+      .eq("remitted", false)
+      .gte("updated_at", todayRange.start.toISOString())
+      .lt("updated_at", todayRange.end.toISOString())
+
+    const todayUnremittedAmount = (todayRides || []).reduce(
+      (sum, ride) => sum + Number(ride.platform_fee || 0),
+      0
+    )
+    const totalDueNow = totalOutstanding + todayUnremittedAmount
+    const now = Date.now()
+    const millisecondsUntilTodayDue = Math.max(todayRange.end.getTime() - now, 0)
 
     return NextResponse.json({
       blocked,
@@ -46,8 +64,17 @@ export async function GET(request: NextRequest) {
         ? "Please settle outstanding platform fees before accepting new rides."
         : null,
       currentSettlement: summarizeSettlement(settlement),
+      todaySettlement: summarizeSettlement(todaySettlement),
+      todayRemittance: {
+        totalDue: todayUnremittedAmount,
+        ridesDue: todayRides?.length || 0,
+        dueAt: todayRange.end.toISOString(),
+        millisecondsRemaining: millisecondsUntilTodayDue,
+        isOverdue: millisecondsUntilTodayDue <= 0 && todayUnremittedAmount > 0,
+      },
       outstandingSettlements: outstanding,
       totalOutstanding,
+      totalDueNow,
     })
   } catch (error) {
     console.error("[SettlementStatus] error:", error)

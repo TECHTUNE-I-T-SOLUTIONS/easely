@@ -47,6 +47,9 @@ const upsertCachedSubscription = (subscription: PushSubscription) => {
 
 const readCachedSubscriptions = (userId: string) => activeSubscriptions.get(userId) || [];
 
+const isPlaceholderToken = (token?: string | null) =>
+  !token || token.startsWith('placeholder_');
+
 /**
  * Store a new push subscription in Supabase and cache
  */
@@ -58,19 +61,67 @@ export const storePushSubscription = async (subscription: PushSubscription) => {
     }
 
     if (supabaseAdmin) {
-      const { data, error } = await supabaseAdmin
+      const now = new Date().toISOString();
+      const { data: existingRows, error: existingError } = await supabaseAdmin
         .from('push_subscriptions')
-        .upsert(
-          {
-            user_id: subscription.userId,
-            push_token: subscription.pushToken,
-            platform: subscription.platform,
-            subscribed_at: subscription.subscribedAt,
-            is_active: true,
-            last_verified_at: new Date().toISOString(),
-          },
-          { onConflict: 'user_id,push_token' }
-        );
+        .select('id, push_token, subscribed_at, is_active')
+        .eq('user_id', subscription.userId)
+        .eq('platform', subscription.platform)
+        .order('last_verified_at', { ascending: false, nullsFirst: false })
+        .order('subscribed_at', { ascending: false });
+
+      if (existingError) {
+        console.warn('âš ï¸ [PUSH] Failed to look up existing subscription:', existingError.message);
+      }
+
+      const existing = existingRows?.[0];
+      const payload = {
+        user_id: subscription.userId,
+        push_token:
+          isPlaceholderToken(existing?.push_token) && !isPlaceholderToken(subscription.pushToken)
+            ? subscription.pushToken
+            : subscription.pushToken || existing?.push_token,
+        platform: subscription.platform,
+        subscribed_at: existing?.subscribed_at || subscription.subscribedAt,
+        is_active: true,
+        last_verified_at: now,
+      };
+
+      let data: any = null;
+      let error: any = null;
+
+      if (existing?.id) {
+        const update = await supabaseAdmin
+          .from('push_subscriptions')
+          .update(payload)
+          .eq('id', existing.id)
+          .select()
+          .single();
+
+        data = update.data;
+        error = update.error;
+
+        const duplicateIds = (existingRows || [])
+          .slice(1)
+          .map((row: any) => row.id)
+          .filter(Boolean);
+
+        if (duplicateIds.length > 0) {
+          await supabaseAdmin
+            .from('push_subscriptions')
+            .update({ is_active: false, last_verified_at: now })
+            .in('id', duplicateIds);
+        }
+      } else {
+        const insert = await supabaseAdmin
+          .from('push_subscriptions')
+          .insert(payload)
+          .select()
+          .single();
+
+        data = insert.data;
+        error = insert.error;
+      }
 
       if (error) {
         console.error('⚠️ [PUSH] Failed to store subscription in database:', error.message);
@@ -83,7 +134,7 @@ export const storePushSubscription = async (subscription: PushSubscription) => {
       }
 
       upsertCachedSubscription(subscription);
-      return data ? data[0] : subscription;
+      return data || subscription;
     }
   } catch (error) {
     console.error('⚠️ [PUSH] Could not persist subscription:', error);

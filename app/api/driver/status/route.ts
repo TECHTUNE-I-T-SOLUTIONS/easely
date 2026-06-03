@@ -13,6 +13,65 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ""
 )
 
+function isMissingManualOffColumn(error: any) {
+  const text = `${error?.message || ""} ${error?.details || ""}`
+  return text.includes("manual_availability_off")
+}
+
+async function getDriverForUser(userId: string) {
+  const withManualOff = await supabase
+    .from("drivers")
+    .select("id, availability_status, updated_at, manual_availability_off")
+    .eq("user_id", userId)
+    .single()
+
+  if (!withManualOff.error || !isMissingManualOffColumn(withManualOff.error)) {
+    return { ...withManualOff, hasManualOffColumn: true }
+  }
+
+  const fallback = await supabase
+    .from("drivers")
+    .select("id, availability_status, updated_at")
+    .eq("user_id", userId)
+    .single()
+
+  return { ...fallback, hasManualOffColumn: false }
+}
+
+async function updateDriverAvailability(
+  userId: string,
+  status: string,
+  manualOff?: boolean
+) {
+  const payload: Record<string, any> = {
+    availability_status: status,
+    updated_at: new Date().toISOString(),
+  }
+
+  if (typeof manualOff === "boolean") {
+    payload.manual_availability_off = manualOff
+  }
+
+  const update = await supabase
+    .from("drivers")
+    .update(payload)
+    .eq("user_id", userId)
+    .select("availability_status, updated_at")
+    .single()
+
+  if (!update.error || !isMissingManualOffColumn(update.error)) {
+    return update
+  }
+
+  delete payload.manual_availability_off
+  return supabase
+    .from("drivers")
+    .update(payload)
+    .eq("user_id", userId)
+    .select("availability_status, updated_at")
+    .single()
+}
+
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionFromRequest(request)
@@ -24,11 +83,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const { data: driver, error } = await supabase
-      .from("drivers")
-      .select("id, availability_status, updated_at")
-      .eq("user_id", session.user.id)
-      .single()
+    const { data: driver, error, hasManualOffColumn } = await getDriverForUser(session.user.id)
 
     if (error || !driver) {
       return NextResponse.json(
@@ -117,12 +172,39 @@ export async function GET(request: NextRequest) {
       0
     )
 
+    let status = driver.availability_status || "offline"
+    let updatedAt = driver.updated_at
+    const manualOff = Boolean((driver as any).manual_availability_off)
+
+    if (totalOutstanding > 0) {
+      if (status !== "offline") {
+        const update = await updateDriverAvailability(session.user.id, "offline")
+        if (!update.error) {
+          status = update.data?.availability_status || "offline"
+          updatedAt = update.data?.updated_at || updatedAt
+        } else {
+          status = "offline"
+        }
+      }
+    } else if (!manualOff && status !== "online") {
+      const update = await updateDriverAvailability(
+        session.user.id,
+        "online",
+        hasManualOffColumn ? false : undefined
+      )
+      if (!update.error) {
+        status = update.data?.availability_status || "online"
+        updatedAt = update.data?.updated_at || updatedAt
+      }
+    }
+
     return NextResponse.json({
-      status: driver.availability_status || "offline",
-      updatedAt: driver.updated_at,
+      status,
+      updatedAt,
       driverId: driver.id,
       blocked: totalOutstanding > 0,
       totalOutstanding,
+      manualAvailabilityOff: manualOff,
     })
   } catch (error) {
     console.error("Failed to fetch driver status:", error)
@@ -187,15 +269,12 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    const { data: driver, error } = await supabase
-      .from("drivers")
-      .update({
-        availability_status: status,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("user_id", session.user.id)
-      .select("availability_status, updated_at")
-      .single()
+    const manualOff = status === "offline"
+    const { data: driver, error } = await updateDriverAvailability(
+      session.user.id,
+      status,
+      status === "busy" ? undefined : manualOff
+    )
 
     if (error || !driver) {
       return NextResponse.json(
@@ -208,6 +287,7 @@ export async function PUT(request: NextRequest) {
       success: true,
       status: driver.availability_status,
       updatedAt: driver.updated_at,
+      manualAvailabilityOff: status === "offline",
     })
   } catch (error) {
     console.error("Failed to update driver status:", error)

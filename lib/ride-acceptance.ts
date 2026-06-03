@@ -178,7 +178,7 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
       // Send SMS to driver confirming acceptance
       if (driverPhone) {
         smsTasks.push(
-          sendRideAcceptanceSMS(driverPhone, input.rideId, riderUser?.first_name)
+          sendRideAcceptanceSMS(driverPhone, input.rideId, riderUser?.first_name, updatedRide.pickup_time)
             .then(() => {
               console.log("[RideAcceptance] SMS sent to driver", {
                 rideId: input.rideId,
@@ -193,10 +193,22 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
 
       // Send SMS to rider about driver acceptance
       if (riderUser?.phone_number) {
+        const acceptedPickupTime = new Intl.DateTimeFormat("en-NG", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+          timeZone: "Africa/Lagos",
+        }).format(new Date(updatedRide.pickup_time || updatedRide.created_at))
         const riderSMSMessage = `✅ DRIVER FOUND - CK-${input.rideId.slice(0, 8).toUpperCase()}
 
 Your ride has been accepted!
 Driver: ${driverName}
+Pickup time: ${acceptedPickupTime}
+Open in app: charterkeke:///rider/ride-details?rideId=${input.rideId}
 
 📍 They are heading to your pickup location.
 🔔 You will receive updates soon.

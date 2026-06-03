@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer"
+import sharp from "sharp"
 
 function env(name: string, fallback = "") {
   return process.env[name] || fallback
@@ -43,6 +44,11 @@ function receiptNumber(ride: any) {
   return `CK-${String(ride.id || "ride").replace(/-/g, "").slice(0, 10).toUpperCase()}`
 }
 
+function appDeepLink(ride: any, audience: "rider" | "driver") {
+  const rideId = encodeURIComponent(String(ride.id || ""))
+  return `charterkeke:///${audience}/ride-details?rideId=${rideId}`
+}
+
 function escapeHtml(raw: unknown) {
   return String(raw ?? "")
     .replace(/&/g, "&amp;")
@@ -63,6 +69,8 @@ function normalize(ride: any, audience: "rider" | "driver") {
     number: receiptNumber(ride),
     status: clean(ride.status, "accepted").toUpperCase(),
     createdAt: dateTime(ride.created_at),
+    pickupTime: dateTime(ride.pickup_time || ride.scheduled_at || ride.booking_time),
+    appLink: appDeepLink(ride, audience),
     pickup: clean(ride.pickup_zone),
     dropoff: clean(ride.destination_zone),
     riderName: clean(`${rider.first_name || ""} ${rider.last_name || ""}`.trim(), "Rider"),
@@ -73,7 +81,7 @@ function normalize(ride: any, audience: "rider" | "driver") {
     fare,
     platformFee,
     driverEarnings,
-    total: audience === "driver" ? driverEarnings : fare + platformFee,
+    total: audience === "driver" ? driverEarnings : fare,
   }
 }
 
@@ -103,12 +111,16 @@ export function renderRideReceiptEmailHtml(ride: any, audience: "rider" | "drive
                 </div>
                 <div style="padding:18px">
                   <p><strong>Pickup:</strong> ${escapeHtml(data.pickup)}</p>
+                  <p><strong>Pickup time:</strong> ${escapeHtml(data.pickupTime)}</p>
                   <p><strong>Dropoff:</strong> ${escapeHtml(data.dropoff)}</p>
                   <p><strong>Rider:</strong> ${escapeHtml(data.riderName)}</p>
                   <p><strong>Driver:</strong> ${escapeHtml(data.driverName)} ${data.plateNumber ? `(${escapeHtml(data.plateNumber)})` : ""}</p>
                   <p><strong>${isDriver ? "Driver earning" : "Total payable"}:</strong> ${money(data.total)}</p>
                 </div>
               </div>
+              <p style="margin:0 0 18px;text-align:center">
+                <a href="${escapeHtml(data.appLink)}" style="display:inline-block;background:#ff8a00;color:#111111;text-decoration:none;font-weight:900;border-radius:14px;padding:14px 22px">Open ride in app</a>
+              </p>
               <p style="margin:0;font-size:14px;line-height:1.6;color:#6b7280">The attached PDF is best for printing. The image file is best for quick sharing from your phone.</p>
             </td></tr>
             <tr><td style="background:#ff8a00;padding:16px 28px;color:#111111;font-size:13px;font-weight:800">Affordable Keke rides in Lagos</td></tr>
@@ -131,6 +143,7 @@ export function renderRideReceiptSvg(ride: any, audience: "rider" | "driver") {
     <text x="120" y="274" fill="#fff" opacity=".82" font-family="Arial" font-size="28">${escapeHtml(data.number)} - ${escapeHtml(data.status)}</text>
     ${[
       ["Created", data.createdAt],
+      ["Pickup time", data.pickupTime],
       ["Rider", data.riderName],
       ["Driver", `${data.driverName} ${data.plateNumber ? `- ${data.plateNumber}` : ""}`],
       ["Pickup", data.pickup],
@@ -138,7 +151,7 @@ export function renderRideReceiptSvg(ride: any, audience: "rider" | "driver") {
       [audience === "driver" ? "Driver earning" : "Total payable", money(data.total)],
     ].map((row, index) => {
       const y = 390 + index * 130
-      const total = index === 5
+      const total = /earning|payable/i.test(row[0])
       return `<text x="130" y="${y}" fill="#7c5b37" font-family="Arial" font-size="24" font-weight="900">${escapeHtml(row[0]).toUpperCase()}</text>
       <text x="130" y="${y + 48}" fill="${total ? "#ff8a00" : "#171717"}" font-family="Arial" font-size="${total ? 48 : 34}" font-weight="900">${escapeHtml(row[1]).slice(0, 48)}</text>`
     }).join("")}
@@ -147,10 +160,17 @@ export function renderRideReceiptSvg(ride: any, audience: "rider" | "driver") {
   </svg>`
 }
 
+export async function renderRideReceiptPngBuffer(ride: any, audience: "rider" | "driver") {
+  return sharp(Buffer.from(renderRideReceiptSvg(ride, audience), "utf8"))
+    .png({ quality: 100, compressionLevel: 9 })
+    .toBuffer()
+}
+
 export async function renderRideReceiptPdfBuffer(ride: any, audience: "rider" | "driver") {
   const data = normalize(ride, audience)
   const rows = [
     ["Created", data.createdAt],
+    ["Pickup time", data.pickupTime],
     ["Pickup", data.pickup],
     ["Dropoff", data.dropoff],
     ["Rider", data.riderName],
@@ -249,7 +269,7 @@ export async function sendRideReceiptEmail({
   if (!to || (!env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD"))) return
 
   const pdf = await renderRideReceiptPdfBuffer(ride, audience)
-  const svg = Buffer.from(renderRideReceiptSvg(ride, audience), "utf8")
+  const png = await renderRideReceiptPngBuffer(ride, audience)
   const reference = receiptNumber(ride)
 
   await smtpTransport().sendMail({
@@ -265,9 +285,9 @@ export async function sendRideReceiptEmail({
         contentType: "application/pdf",
       },
       {
-        filename: `${reference}-${audience}.svg`,
-        content: svg,
-        contentType: "image/svg+xml",
+        filename: `${reference}-${audience}.png`,
+        content: png,
+        contentType: "image/png",
       },
     ],
   })

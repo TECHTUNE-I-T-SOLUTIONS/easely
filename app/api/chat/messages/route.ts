@@ -35,7 +35,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Not authorized for this chat" }, { status: 403 });
     }
 
-    // Get messages
+    const { data: participantChats, error: participantChatsError } = await supabaseAdmin!
+      .from("chats")
+      .select("id")
+      .eq("rider_id", chat.rider_id)
+      .eq("driver_id", chat.driver_id);
+
+    if (participantChatsError) {
+      console.error('Participant chats fetch error:', participantChatsError);
+      return NextResponse.json({ error: "Failed to fetch conversation" }, { status: 500 });
+    }
+
+    const chatIds = (participantChats || []).map((participantChat) => participantChat.id);
+
+    if (chatIds.length === 0) {
+      return NextResponse.json({ messages: [] });
+    }
+
+    // Get all messages between these two users, including older ride-scoped chat rows.
     const { data: messages, error: messagesError } = await supabaseAdmin!
       .from("messages")
       .select(`
@@ -54,7 +71,7 @@ export async function GET(request: NextRequest) {
           last_name
         )
       `)
-      .eq('chat_id', chatId)
+      .in('chat_id', chatIds)
       .order('sent_at', { ascending: false })
       .range(offset, offset + limit - 1);
 

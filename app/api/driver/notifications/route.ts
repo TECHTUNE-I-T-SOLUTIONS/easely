@@ -22,7 +22,11 @@ const buildNotificationLink = (notification: any, role: "rider" | "driver") => {
   const ticketId = payload.ticketId || payload.ticket_id || payload.support_ticket_id
   const chatId = payload.chatId || payload.chat_id
   const type = String(payload.type || payload.notification_type || "").toLowerCase()
+  const relatedTable = String(payload.related_table || payload.table || "").toLowerCase()
 
+  if (relatedTable === "messages" || chatId) {
+    return "/driver/chat" + (rideId ? "?rideId=" + rideId : chatId ? "?chatId=" + chatId : "")
+  }
   if (type === "ride_request") {
     return rideId ? "/driver/available-rides?focusRide=" + rideId : "/driver/rides"
   }

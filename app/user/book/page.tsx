@@ -65,6 +65,7 @@ function BookRideContent() {
   const [showPickupResults, setShowPickupResults] = useState(false)
   const [showDropoffResults, setShowDropoffResults] = useState(false)
   const [isBooking, setIsBooking] = useState(false)
+  const [locatingFor, setLocatingFor] = useState<"pickup" | "dropoff" | null>(null)
 
   // Calculate distance using Haversine formula
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {
@@ -194,6 +195,59 @@ function BookRideContent() {
     } catch (error) {
       console.error("Reverse geocoding error:", error)
       return `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+    }
+  }
+
+  const getFreshBrowserLocation = async (): Promise<{ lat: number; lng: number; accuracy?: number }> => {
+    if (!navigator.geolocation) {
+      throw new Error("Location is not supported by this browser")
+    }
+
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+          })
+        },
+        () => reject(new Error("Unable to read your current location. Please check browser location permission.")),
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 0,
+        }
+      )
+    })
+  }
+
+  const useCurrentLocation = async (type: "pickup" | "dropoff") => {
+    try {
+      setLocatingFor(type)
+      const coords = await getFreshBrowserLocation()
+      const address = await reverseGeocode(coords.lat, coords.lng)
+      const location = { lat: coords.lat, lng: coords.lng, address }
+
+      if (type === "pickup") {
+        setPickupLocation(location)
+        setPickupSearch("")
+        setPickupSearchResults([])
+        setShowPickupResults(false)
+      } else {
+        setDropoffLocation(location)
+        setDropoffSearch("")
+        setDropoffSearchResults([])
+        setShowDropoffResults(false)
+      }
+
+      toast.success(`Current location set as ${type}`, {
+        description: coords.accuracy ? `GPS accuracy: about ${Math.round(coords.accuracy)}m` : undefined,
+      })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to read current location")
+    } finally {
+      setLocatingFor(null)
     }
   }
 
@@ -397,6 +451,19 @@ function BookRideContent() {
                           </div>
                         )}
                         <Button
+                          onClick={() => useCurrentLocation("pickup")}
+                          variant="secondary"
+                          className="w-full h-10 text-sm font-medium"
+                          disabled={locatingFor !== null}
+                        >
+                          {locatingFor === "pickup" ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          ) : (
+                            <Navigation className="h-4 w-4 mr-2" />
+                          )}
+                          Use current location
+                        </Button>
+                        <Button
                           onClick={() => setActiveLocationPicker("pickup")}
                           variant={activeLocationPicker === "pickup" ? "default" : "outline"}
                           className="w-full h-10 text-sm font-medium"
@@ -464,6 +531,19 @@ function BookRideContent() {
                             ))}
                           </div>
                         )}
+                        <Button
+                          onClick={() => useCurrentLocation("dropoff")}
+                          variant="secondary"
+                          className="w-full h-10 text-sm font-medium"
+                          disabled={locatingFor !== null}
+                        >
+                          {locatingFor === "dropoff" ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          ) : (
+                            <Navigation className="h-4 w-4 mr-2" />
+                          )}
+                          Use current location
+                        </Button>
                         <Button
                           onClick={() => setActiveLocationPicker("dropoff")}
                           variant={activeLocationPicker === "dropoff" ? "default" : "outline"}

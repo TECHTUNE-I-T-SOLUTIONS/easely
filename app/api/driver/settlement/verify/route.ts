@@ -2,6 +2,73 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase"
 
+async function markPaidSettlementRides(driverId: string, settlementIds: string[] = [], rideIds: string[] = [], paymentId?: string | null) {
+  const uniqueRideIds = Array.from(new Set((rideIds || []).filter(Boolean)))
+
+  if (uniqueRideIds.length > 0) {
+    await supabaseAdmin!
+      .from("rides")
+      .update({
+        remitted: true,
+        remitted_at: new Date().toISOString(),
+        remitted_by_payment_id: paymentId || null,
+      })
+      .in("id", uniqueRideIds)
+      .eq("driver_id", driverId)
+  }
+
+  for (const settlementId of settlementIds || []) {
+    const { data: settlement } = await supabaseAdmin!
+      .from("driver_daily_settlement")
+      .select("id, settlement_date")
+      .eq("id", settlementId)
+      .eq("driver_id", driverId)
+      .maybeSingle()
+
+    if (!settlement?.settlement_date) continue
+
+    const start = new Date(`${settlement.settlement_date}T00:00:00.000Z`)
+    const end = new Date(start)
+    end.setUTCDate(start.getUTCDate() + 1)
+
+    if (uniqueRideIds.length === 0) {
+      await supabaseAdmin!
+        .from("rides")
+        .update({
+          remitted: true,
+          remitted_at: new Date().toISOString(),
+          remitted_by_payment_id: paymentId || null,
+        })
+        .eq("driver_id", driverId)
+        .eq("remitted", false)
+        .in("status", ["accepted", "in_progress", "completed"])
+        .gte("updated_at", start.toISOString())
+        .lt("updated_at", end.toISOString())
+    }
+
+    const { data: remaining } = await supabaseAdmin!
+      .from("rides")
+      .select("id")
+      .eq("driver_id", driverId)
+      .eq("remitted", false)
+      .in("status", ["accepted", "in_progress", "completed"])
+      .gte("updated_at", start.toISOString())
+      .lt("updated_at", end.toISOString())
+      .limit(1)
+
+    if (!remaining?.length) {
+      await supabaseAdmin!
+        .from("driver_daily_settlement")
+        .update({
+          settlement_status: "paid",
+          paid_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", settlementId)
+    }
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const session = await getSessionFromRequest(request)
@@ -42,7 +109,7 @@ export async function POST(request: NextRequest) {
     }
 
     const transaction = verifyData.data
-    const { settlementIds } = transaction.metadata || {}
+    const { settlementIds, rideIds } = transaction.metadata || {}
 
     // Normalize Paystack status to our DB status values
     const paymentStatus = transaction.status
@@ -63,6 +130,13 @@ export async function POST(request: NextRequest) {
       .eq("payment_reference", reference)
       .eq("driver_id", driver.id)
 
+    const { data: localPayment } = await supabaseAdmin!
+      .from("driver_payments")
+      .select("id")
+      .eq("payment_reference", reference)
+      .eq("driver_id", driver.id)
+      .maybeSingle()
+
     // Update transaction status in transactions table
     const { data: transactions } = await supabaseAdmin!
       .from("transactions")
@@ -77,16 +151,9 @@ export async function POST(request: NextRequest) {
         .eq("reference", reference)
     }
 
-    // If payment successful, mark settlements as paid
-    if (normalizedPaymentStatus === "completed" && Array.isArray(settlementIds) && settlementIds.length > 0) {
-      await supabaseAdmin!
-        .from("driver_daily_settlement")
-        .update({
-          settlement_status: "paid",
-          paid_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .in("id", settlementIds)
+    // If payment successful, mark paid ride remittance and close settlement only when fully remitted.
+    if (normalizedPaymentStatus === "completed" && (Array.isArray(settlementIds) || Array.isArray(rideIds))) {
+      await markPaidSettlementRides(driver.id, settlementIds || [], rideIds || [], localPayment?.id || null)
 
       // Check if driver has remaining unpaid settlements
       const { data: unpaidSettlements } = await supabaseAdmin!
@@ -238,6 +305,16 @@ export async function GET(request: NextRequest) {
         .from("transactions")
         .update({ status: transactionStatus, updated_at: new Date().toISOString() })
         .eq("reference", reference)
+
+      const metadata = (payment.metadata as any) || transaction.metadata || {}
+      if (normalizedPaymentStatus === "completed") {
+        await markPaidSettlementRides(
+          driver.id,
+          metadata.settlement_ids || metadata.settlementIds || [],
+          metadata.ride_ids || metadata.rideIds || [],
+          payment.id
+        )
+      }
 
       // Add notification if status changed to success
       if (normalizedPaymentStatus === "completed" && payment.status !== "completed") {

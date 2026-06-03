@@ -40,10 +40,10 @@ const applyCorsHeaders = (response: NextResponse, request: NextRequest) => {
 };
 
 /**
- * Middleware to protect routes and enforce role-based access
+ * Proxy to protect routes and enforce role-based access
  * Note: NextAuth session checks are done client-side via auth context
  */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
   if (pathname.startsWith("/api/")) {

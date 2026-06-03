@@ -172,12 +172,15 @@ export async function POST(request: NextRequest) {
           title: "🚗 New Ride Request",
           body: `Pickup: ${pickupZone}`,
           type: "ride_request",
+          categoryId: "ride_request_action",
           data: {
             rideId: ride.id,
             pickup: pickupZone,
             destination: destinationZone,
             fare: Number(final_fare_amount || 0),
             distance: Number(estimated_distance || 0),
+            deeplink: `/driver/ride-details?rideId=${ride.id}`,
+            actions: ["accept", "reject"],
           },
         });
         console.log("[RideDispatch] Targeted push notification sent to drivers", {

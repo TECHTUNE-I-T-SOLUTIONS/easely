@@ -32,16 +32,19 @@ export async function GET(request: NextRequest) {
       console.error('Error fetching settlements', unpaidError);
     }
 
-    // Determine if driver should be forced offline
-    const hasOutstanding = Array.isArray(unpaid) && unpaid.length > 0 && unpaid.some((s: any) => {
+    // Only overdue settlements should lock a driver. Today's pending remittance is a reminder,
+    // not a reason to force availability off.
+    const overdueSettlements = (unpaid || []).filter((s: any) => {
       if (!s) return false;
       return s.settlement_status !== 'paid' && (s.payment_due_date && new Date(s.payment_due_date) <= new Date() || s.settlement_status === 'overdue');
     });
+    const hasOutstanding = overdueSettlements.length > 0;
 
-    // Update driver availability accordingly
-    const newStatus = hasOutstanding ? 'offline' : 'online';
-    if (driver.availability_status !== newStatus) {
-      await supabase.from('drivers').update({ availability_status: newStatus, updated_at: new Date().toISOString() }).eq('id', driver.id);
+    if (hasOutstanding && driver.availability_status !== 'offline') {
+      await supabase
+        .from('drivers')
+        .update({ availability_status: 'offline', updated_at: new Date().toISOString() })
+        .eq('id', driver.id);
     }
 
     // Gather today's remittable rides (not yet remitted)
@@ -60,9 +63,10 @@ export async function GET(request: NextRequest) {
     const totalDue = (rides || []).reduce((acc: number, r: any) => acc + (Number(r.platform_fee || 0)), 0);
 
     return NextResponse.json({
-      driver: { id: driver.id, availability_status: newStatus },
+      driver: { id: driver.id, availability_status: hasOutstanding ? 'offline' : driver.availability_status },
       hasOutstanding,
-      settlementsDue: unpaid || [],
+      settlementsDue: overdueSettlements,
+      pendingSettlements: (unpaid || []).filter((s: any) => !overdueSettlements.some((o: any) => o.id === s.id)),
       ridesDueToday: rides || [],
       totalPlatformFeeDueToday: Number(totalDue.toFixed(2)),
     });

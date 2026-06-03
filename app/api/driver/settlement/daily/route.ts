@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase"
-import { summarizeSettlement, upsertSettlementForDate } from "@/lib/driver-settlement"
+import {
+  getLagosDateString,
+  getLagosDayRange,
+  summarizeSettlement,
+  upsertSettlementForDate,
+} from "@/lib/driver-settlement"
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -38,15 +43,8 @@ function isValidDateInput(value: string) {
   return !Number.isNaN(parsed.getTime())
 }
 
-function getDayRange(dateString: string) {
-  const start = new Date(`${dateString}T00:00:00.000Z`)
-  const end = new Date(start)
-  end.setUTCDate(start.getUTCDate() + 1)
-  return { start, end }
-}
-
 export async function GET(request: NextRequest) {
-  let dateString = new Date().toISOString().slice(0, 10); // Default value
+  let dateString = getLagosDateString(); // Default value
 
   try {
     const session = await getSessionFromRequest(request)
@@ -61,7 +59,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const requestedDate = searchParams.get("date")
-    dateString = requestedDate || new Date().toISOString().slice(0, 10)
+    dateString = requestedDate || getLagosDateString()
 
     console.info(`[SettlementDaily] request from user=${session.user.id} date=${dateString} url=${request.url}`)
 
@@ -84,12 +82,12 @@ export async function GET(request: NextRequest) {
 
     const settlement = await withRetry(() => upsertSettlementForDate(driver.id, dateString))
 
-    const { start, end } = getDayRange(dateString)
+    const { start, end } = getLagosDayRange(dateString)
 
     const { data: rides, error: ridesError } = await withRetry(async () =>
       supabaseAdmin!
         .from("rides")
-        .select("id, fare_amount, platform_fee, driver_earnings, status, pickup_zone, destination_zone, distance_km, duration_minutes, created_at, updated_at")
+        .select("id, fare_amount, platform_fee, driver_earnings, status, pickup_zone, destination_zone, distance_km, duration_minutes, created_at, updated_at, remitted, remitted_at")
         .eq("driver_id", driver.id)
         .in("status", ["accepted", "in_progress", "completed"])
         .gte("updated_at", start.toISOString())
@@ -109,6 +107,8 @@ export async function GET(request: NextRequest) {
       fare_amount: Number(ride.fare_amount || 0),
       platform_fee: Number(ride.platform_fee || 0),
       driver_earnings: Number(ride.driver_earnings || 0),
+      remitted: Boolean(ride.remitted),
+      remitted_at: ride.remitted_at || null,
       distance_km: Number(ride.distance_km || 0),
       duration_minutes: Number(ride.duration_minutes || 0),
       accepted_at: ride.updated_at,
@@ -190,8 +190,14 @@ export async function GET(request: NextRequest) {
     )
     const paidPlatformFees = Math.max(paidFromDriverPayments, paidFromTransactions)
     const totalPlatformFees = Number(settlement.total_platform_fees || 0)
-    const outstandingPlatformFees = Math.max(totalPlatformFees - paidPlatformFees, 0)
-    const effectiveStatus = outstandingPlatformFees <= 0 ? "paid" : "pending"
+    const unremittedPlatformFees = ridesList
+      .filter((ride) => !ride.remitted)
+      .reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0)
+    const outstandingPlatformFees = Math.max(unremittedPlatformFees || (totalPlatformFees - paidPlatformFees), 0)
+    const now = new Date()
+    const dueDate = end
+    const isPastDue = now.getTime() >= dueDate.getTime()
+    const effectiveStatus = outstandingPlatformFees <= 0 ? "paid" : isPastDue ? "overdue" : "pending"
 
     if (settlement.settlement_status !== effectiveStatus) {
       await supabaseAdmin
@@ -239,6 +245,10 @@ export async function GET(request: NextRequest) {
         acceptedRides: ridesList.length,
         grossAmount: ridesList.reduce((sum, ride) => sum + Number(ride.fare_amount || 0), 0),
         platformFee: ridesList.reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
+        remittedPlatformFee: ridesList
+          .filter((ride) => ride.remitted)
+          .reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
+        unremittedPlatformFee: unremittedPlatformFees,
         netDriverEarnings: ridesList.reduce((sum, ride) => sum + Number(ride.driver_earnings || 0), 0),
       },
       paymentSummary: {
@@ -246,6 +256,11 @@ export async function GET(request: NextRequest) {
         paidPlatformFees,
         outstandingPlatformFees,
         lastPaymentDate: resolvedLastPaymentDate,
+      },
+      due: {
+        dueAt: dueDate.toISOString(),
+        isOverdue: isPastDue && outstandingPlatformFees > 0,
+        millisecondsRemaining: Math.max(dueDate.getTime() - now.getTime(), 0),
       },
     })
   } catch (error: any) {

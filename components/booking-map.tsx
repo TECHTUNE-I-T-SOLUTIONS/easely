@@ -31,6 +31,7 @@ export function BookingMap({
   const mapInstanceRef = useRef<any>(null)
   const pickupMarkerRef = useRef<any>(null)
   const dropoffMarkerRef = useRef<any>(null)
+  const currentMarkerRef = useRef<any>(null)
   const routeLayerRef = useRef<any>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
@@ -39,16 +40,35 @@ export function BookingMap({
   // Get user's current location
   useEffect(() => {
     if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
+      const options: PositionOptions = {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      }
+
+      const watchId = navigator.geolocation.watchPosition(
         (position) => {
           setUserLocation([position.coords.latitude, position.coords.longitude])
         },
         (error) => {
           console.log("Geolocation error:", error)
-          // Default to Lagos if geolocation fails
-          setUserLocation([6.5244, 3.3792])
-        }
+          setUserLocation((current) => current || [6.5244, 3.3792])
+        },
+        options
       )
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation([position.coords.latitude, position.coords.longitude])
+        },
+        (error) => {
+          console.log("Initial geolocation error:", error)
+          setUserLocation((current) => current || [6.5244, 3.3792])
+        },
+        options
+      )
+
+      return () => navigator.geolocation.clearWatch(watchId)
     } else {
       // Default to Lagos
       setUserLocation([6.5244, 3.3792])
@@ -57,7 +77,7 @@ export function BookingMap({
 
   // Initialize map
   useEffect(() => {
-    if (!mapRef.current || !userLocation) return
+    if (!mapRef.current || mapInstanceRef.current) return
 
     let L: any
     let map: any
@@ -66,6 +86,7 @@ export function BookingMap({
       try {
         // Dynamically import Leaflet
         L = (await import("leaflet")).default
+        ;(window as any).L = L
         await import("leaflet/dist/leaflet.css")
 
         // Fix marker icons
@@ -78,7 +99,7 @@ export function BookingMap({
 
         // Create map
         map = L.map(mapRef.current, {
-          center: userLocation,
+          center: userLocation || [6.5244, 3.3792],
           zoom: 13,
           zoomControl: true,
           attributionControl: true,
@@ -91,6 +112,18 @@ export function BookingMap({
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
           maxZoom: 19,
         }).addTo(map)
+
+        const currentIcon = L.divIcon({
+          html: '<div style="background:#2563eb;width:18px;height:18px;border-radius:50%;border:3px solid white;box-shadow:0 2px 10px rgba(0,0,0,.35);"></div>',
+          className: "",
+          iconSize: [18, 18],
+          iconAnchor: [9, 9],
+        })
+        if (userLocation) {
+          currentMarkerRef.current = L.marker(userLocation, { icon: currentIcon })
+            .addTo(map)
+            .bindPopup("Your current location")
+        }
 
         // Add click handler. Use a ref to read the latest picker state (avoids stale closure)
         map.on("click", async (e: any) => {
@@ -158,6 +191,27 @@ export function BookingMap({
         mapInstanceRef.current.remove()
         mapInstanceRef.current = null
       }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!mapInstanceRef.current || !userLocation) return
+
+    const L = (window as any).L
+    if (!L) return
+
+    if (currentMarkerRef.current) {
+      currentMarkerRef.current.setLatLng(userLocation)
+    } else {
+      const currentIcon = L.divIcon({
+        html: '<div style="background:#2563eb;width:18px;height:18px;border-radius:50%;border:3px solid white;box-shadow:0 2px 10px rgba(0,0,0,.35);"></div>',
+        className: "",
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+      })
+      currentMarkerRef.current = L.marker(userLocation, { icon: currentIcon })
+        .addTo(mapInstanceRef.current)
+        .bindPopup("Your current location")
     }
   }, [userLocation])
 

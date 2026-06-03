@@ -75,25 +75,20 @@ export async function GET(request: NextRequest) {
           riderData = rider;
         }
 
-        // Fetch driver details (need to get user_id from drivers table first)
+        // chats.driver_id references users.id. Older code treated it as drivers.id,
+        // which made rider message lists miss driver profile data.
         if (chat.driver_id) {
-          const { data: driver } = await supabaseAdmin!
-            .from("drivers")
-            .select("user_id")
+          const { data: driverUser } = await supabaseAdmin!
+            .from("users")
+            .select("id, first_name, last_name, profile_picture_url")
             .eq("id", chat.driver_id)
             .single();
-
-          if (driver?.user_id) {
-            const { data: driverUser } = await supabaseAdmin!
-              .from("users")
-              .select("id, first_name, last_name, profile_picture_url")
-              .eq("id", driver.user_id)
-              .single();
-            driverData = driverUser;
-          }
+          driverData = driverUser;
         }
 
-        const messages = chat.messages || [];
+        const messages = [...(chat.messages || [])].sort(
+          (a: any, b: any) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+        );
         const lastMessage = messages[messages.length - 1];
 
         // Determine if current user is rider or driver
@@ -131,7 +126,37 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({ chats: enrichedChats });
+    const groupedChats = Array.from(
+      enrichedChats.reduce((map: Map<string, any>, chat: any) => {
+        const otherUserId = chat.rider_id === session.user.id ? chat.driver_id : chat.rider_id;
+        const key = otherUserId || chat.id;
+        const existing = map.get(key);
+        const chatTime = new Date(chat.last_message?.sent_at || chat.updated_at || chat.created_at).getTime();
+        const existingTime = existing
+          ? new Date(existing.last_message?.sent_at || existing.updated_at || existing.created_at).getTime()
+          : -1;
+
+        if (!existing || chatTime > existingTime) {
+          map.set(key, {
+            ...chat,
+            unreadCount: (existing?.unreadCount || 0) + (chat.unreadCount || 0),
+            unread_count: (existing?.unreadCount || 0) + (chat.unreadCount || 0),
+          });
+        } else {
+          existing.unreadCount = (existing.unreadCount || 0) + (chat.unreadCount || 0);
+          existing.unread_count = existing.unreadCount;
+          map.set(key, existing);
+        }
+
+        return map;
+      }, new Map<string, any>()).values()
+    ).sort(
+      (a: any, b: any) =>
+        new Date(b.last_message?.sent_at || b.updated_at || b.created_at).getTime() -
+        new Date(a.last_message?.sent_at || a.updated_at || a.created_at).getTime()
+    );
+
+    return NextResponse.json({ chats: groupedChats });
   } catch (error) {
     console.error("[GET /api/chat/user] Error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

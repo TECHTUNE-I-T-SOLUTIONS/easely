@@ -7,6 +7,73 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+async function markPaidSettlementRides(driverId: string, settlementIds: string[] = [], rideIds: string[] = [], paymentId?: string | null) {
+  const uniqueRideIds = Array.from(new Set((rideIds || []).filter(Boolean)))
+
+  if (uniqueRideIds.length > 0) {
+    await supabase
+      .from("rides")
+      .update({
+        remitted: true,
+        remitted_at: new Date().toISOString(),
+        remitted_by_payment_id: paymentId || null,
+      })
+      .in("id", uniqueRideIds)
+      .eq("driver_id", driverId)
+  }
+
+  for (const settlementId of settlementIds || []) {
+    const { data: settlement } = await supabase
+      .from("driver_daily_settlement")
+      .select("id, settlement_date")
+      .eq("id", settlementId)
+      .eq("driver_id", driverId)
+      .maybeSingle()
+
+    if (!settlement?.settlement_date) continue
+
+    const start = new Date(`${settlement.settlement_date}T00:00:00.000Z`)
+    const end = new Date(start)
+    end.setUTCDate(start.getUTCDate() + 1)
+
+    if (uniqueRideIds.length === 0) {
+      await supabase
+        .from("rides")
+        .update({
+          remitted: true,
+          remitted_at: new Date().toISOString(),
+          remitted_by_payment_id: paymentId || null,
+        })
+        .eq("driver_id", driverId)
+        .eq("remitted", false)
+        .in("status", ["accepted", "in_progress", "completed"])
+        .gte("updated_at", start.toISOString())
+        .lt("updated_at", end.toISOString())
+    }
+
+    const { data: remaining } = await supabase
+      .from("rides")
+      .select("id")
+      .eq("driver_id", driverId)
+      .eq("remitted", false)
+      .in("status", ["accepted", "in_progress", "completed"])
+      .gte("updated_at", start.toISOString())
+      .lt("updated_at", end.toISOString())
+      .limit(1)
+
+    if (!remaining?.length) {
+      await supabase
+        .from("driver_daily_settlement")
+        .update({
+          settlement_status: "paid",
+          paid_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", settlementId)
+    }
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -220,7 +287,7 @@ export async function POST(request: NextRequest) {
     }
 
     const paymentData = verifyData.data
-    const { driverId, settlementIds } = paymentData.metadata
+    const { driverId, settlementIds, rideIds } = paymentData.metadata
 
     const { data: existingPayment } = await supabase
       .from("driver_payments")
@@ -242,14 +309,8 @@ export async function POST(request: NextRequest) {
       .single()
 
     // Update all related settlements to paid
-    if (settlementIds?.length) {
-      await supabase
-        .from("driver_daily_settlement")
-        .update({
-          settlement_status: "paid",
-          paid_at: new Date().toISOString(),
-        })
-        .in("id", settlementIds)
+    if (driverId && (settlementIds?.length || rideIds?.length)) {
+      await markPaidSettlementRides(driverId, settlementIds || [], rideIds || [], payment?.id || existingPayment?.id || null)
     }
 
     // Get driver user ID for push notification
@@ -290,22 +351,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check if driver has any unpaid settlements
-    if (driverId) {
-      const { data: unpaidSettlements } = await supabase
-        .from("driver_daily_settlement")
-        .select("id")
-        .eq("driver_id", driverId)
-        .in("settlement_status", ["pending", "overdue"])
-
-      // If no unpaid settlements, allow driver to go online
-      if (!unpaidSettlements?.length) {
-        await supabase
-          .from("drivers")
-          .update({ availability_status: "offline", updated_at: new Date().toISOString() })
-          .eq("id", driverId)
-      }
-    }
+    // Do not change availability after payment verification. Availability is only
+    // forced offline by overdue remittance checks, and drivers can toggle online
+    // themselves when no overdue balance remains.
 
     return NextResponse.json({
       success: true,

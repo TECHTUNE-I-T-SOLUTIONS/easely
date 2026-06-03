@@ -158,25 +158,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check remaining outstanding settlements
+    // Check remaining overdue settlements. Same-day pending remittance should not
+    // affect availability until it passes its due time.
     const { data: stillOutstanding } = await supabaseAdmin!
       .from("driver_daily_settlement")
-      .select("id")
+      .select("id, payment_due_date, settlement_status")
       .eq("driver_id", driver.id)
       .in("settlement_status", ["pending", "overdue"])
 
-    console.log(`[VerifyAll] Still outstanding: ${stillOutstanding?.length || 0} settlements`)
+    const overdueSettlements = (stillOutstanding || []).filter((settlement: any) =>
+      settlement.settlement_status === "overdue" ||
+      (settlement.payment_due_date && new Date(settlement.payment_due_date) <= new Date())
+    )
 
-    // If no outstanding settlements, set driver availability to offline (they can toggle online)
-    if (!stillOutstanding?.length) {
-      await supabaseAdmin!
-        .from("drivers")
-        .update({ 
-          availability_status: "offline",
-          updated_at: new Date().toISOString() 
-        })
-        .eq("id", driver.id)
-    }
+    console.log(`[VerifyAll] Still overdue: ${overdueSettlements.length} settlements`)
 
     return NextResponse.json({
       success: true,
@@ -184,7 +179,7 @@ export async function POST(request: NextRequest) {
       verified: verifiedCount,
       updated: updatedCount,
       results,
-      outstandingSettlements: stillOutstanding?.length || 0,
+      outstandingSettlements: overdueSettlements.length,
     })
   } catch (error) {
     console.error("[VerifyAll] error:", error)

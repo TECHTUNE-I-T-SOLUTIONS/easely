@@ -79,16 +79,22 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    // Check if driver has unpaid settlements
+    // Only overdue settlements should prevent unlocking. Current-day pending
+    // remittance is allowed until midnight.
     const { data: unpaidSettlements } = await supabase
       .from("driver_daily_settlement")
-      .select("id")
+      .select("id, payment_due_date, settlement_status")
       .eq("driver_id", driverId)
-      .eq("settlement_status", "pending")
+      .in("settlement_status", ["pending", "overdue"])
 
-    if (unpaidSettlements?.length) {
+    const overdueSettlements = (unpaidSettlements || []).filter((settlement: any) =>
+      settlement.settlement_status === "overdue" ||
+      (settlement.payment_due_date && new Date(settlement.payment_due_date) <= new Date())
+    )
+
+    if (overdueSettlements.length) {
       return NextResponse.json(
-        { error: "Driver has unpaid settlements", unpaidCount: unpaidSettlements.length },
+        { error: "Driver has overdue settlements", unpaidCount: overdueSettlements.length },
         { status: 400 }
       )
     }

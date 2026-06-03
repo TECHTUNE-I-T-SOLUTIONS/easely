@@ -48,6 +48,7 @@ const userNavItems: NavItem[] = [
   { label: "Wallet", href: "/user/wallet", icon: <Wallet className="h-5 w-5" /> },
   { label: "Referrals", href: "/user/referrals", icon: <Gift className="h-5 w-5" /> },
   { label: "Notifications", href: "/user/notifications", icon: <Bell className="h-5 w-5" /> },
+  { label: "Support", href: "/user/support", icon: <MessageSquare className="h-5 w-5" /> },
   { label: "Settings", href: "/user/settings", icon: <Settings className="h-5 w-5" /> },
 ]
 
@@ -56,8 +57,10 @@ const driverNavItems: NavItem[] = [
   { label: "Active Rides", href: "/driver/rides", icon: <Car className="h-5 w-5" /> },
   { label: "Ride History", href: "/driver/history", icon: <History className="h-5 w-5" /> },
   { label: "Earnings", href: "/driver/earnings", icon: <Wallet className="h-5 w-5" /> },
+  { label: "Remittance", href: "/driver/payments", icon: <CreditCard className="h-5 w-5" /> },
   { label: "Referrals", href: "/driver/referrals", icon: <Gift className="h-5 w-5" /> },
   { label: "Notifications", href: "/driver/notifications", icon: <Bell className="h-5 w-5" /> },
+  { label: "Support", href: "/driver/support", icon: <MessageSquare className="h-5 w-5" /> },
   { label: "Settings", href: "/driver/settings", icon: <Settings className="h-5 w-5" /> },
 ]
 

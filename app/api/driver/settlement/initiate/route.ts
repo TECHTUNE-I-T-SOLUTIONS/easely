@@ -3,6 +3,8 @@ import { getSessionFromRequest } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase"
 import {
   getDateRangeForOffset,
+  getLagosDateString,
+  getLagosDayRange,
   upsertSettlementForDate,
   updateOverdueSettlements,
   getOutstandingSettlements,
@@ -26,7 +28,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Driver profile not found" }, { status: 404 })
     }
 
-    let payload: { date?: string; returnUrl?: string } = {}
+    let payload: { date?: string; rideId?: string; returnUrl?: string; includeToday?: boolean } = {}
     try {
       payload = (await request.json()) || {}
     } catch {
@@ -34,14 +36,44 @@ export async function POST(request: NextRequest) {
     }
 
     const requestedDate = payload?.date
+    const requestedRideId = payload?.rideId
+    const includeToday = payload?.includeToday === true
     const mobileReturnUrl = typeof payload?.returnUrl === "string" ? payload.returnUrl : null
 
     await updateOverdueSettlements(driver.id)
 
     let settlementIds: string[] = []
+    let rideIds: string[] = []
     let amount = 0
+    let description = "outstanding settlements"
 
-    if (requestedDate) {
+    if (requestedRideId) {
+      const { data: ride, error: rideError } = await supabaseAdmin!
+        .from("rides")
+        .select("id, platform_fee, status, remitted, updated_at")
+        .eq("id", requestedRideId)
+        .eq("driver_id", driver.id)
+        .single()
+
+      if (rideError || !ride) {
+        return NextResponse.json({ error: "Ride not found for remittance" }, { status: 404 })
+      }
+
+      if (ride.remitted) {
+        return NextResponse.json({ error: "This ride has already been remitted" }, { status: 400 })
+      }
+
+      if (!["accepted", "in_progress", "completed"].includes(ride.status)) {
+        return NextResponse.json({ error: "Ride is not eligible for remittance yet" }, { status: 400 })
+      }
+
+      const rideDate = getLagosDateString(new Date(ride.updated_at || new Date()))
+      const settlement = await upsertSettlementForDate(driver.id, rideDate)
+      settlementIds = [settlement.id]
+      rideIds = [ride.id]
+      amount = Number(ride.platform_fee || 0)
+      description = `ride ${ride.id.slice(0, 8).toUpperCase()}`
+    } else if (requestedDate) {
       const dateRegex = /^\d{4}-\d{2}-\d{2}$/
       if (!dateRegex.test(requestedDate)) {
         return NextResponse.json(
@@ -51,14 +83,33 @@ export async function POST(request: NextRequest) {
       }
 
       const settlement = await upsertSettlementForDate(driver.id, requestedDate)
-      const settlementAmount = Number(settlement?.total_platform_fees || 0)
+      const { start, end } = getLagosDayRange(requestedDate)
+      const { data: remittableRides, error: ridesError } = await supabaseAdmin!
+        .from("rides")
+        .select("id, platform_fee")
+        .eq("driver_id", driver.id)
+        .in("status", ["accepted", "in_progress", "completed"])
+        .eq("remitted", false)
+        .gte("updated_at", start.toISOString())
+        .lt("updated_at", end.toISOString())
 
-      if (settlement?.settlement_status === "paid" || settlementAmount <= 0) {
+      if (ridesError) {
+        throw ridesError
+      }
+
+      rideIds = (remittableRides || []).map((ride) => ride.id)
+      const settlementAmount = (remittableRides || []).reduce(
+        (sum, ride) => sum + Number(ride.platform_fee || 0),
+        0
+      )
+
+      if (settlementAmount <= 0) {
         return NextResponse.json({ error: "No settlement due for selected date" }, { status: 400 })
       }
 
       settlementIds = [settlement.id]
       amount = settlementAmount
+      description = requestedDate
     } else {
       const { dateString } = getDateRangeForOffset(-1)
       await upsertSettlementForDate(driver.id, dateString)
@@ -70,9 +121,43 @@ export async function POST(request: NextRequest) {
         0
       )
 
+      if (includeToday) {
+        const todayRange = getDateRangeForOffset(0)
+        const todaySettlement = await upsertSettlementForDate(driver.id, todayRange.dateString)
+        const { data: todayRides, error: todayRidesError } = await supabaseAdmin!
+          .from("rides")
+          .select("id, platform_fee")
+          .eq("driver_id", driver.id)
+          .in("status", ["accepted", "in_progress", "completed"])
+          .eq("remitted", false)
+          .gte("updated_at", todayRange.start.toISOString())
+          .lt("updated_at", todayRange.end.toISOString())
+
+        if (todayRidesError) {
+          throw todayRidesError
+        }
+
+        const todayAmount = (todayRides || []).reduce(
+          (sum, ride) => sum + Number(ride.platform_fee || 0),
+          0
+        )
+
+        if (todayAmount > 0) {
+          settlementIds = Array.from(new Set([...settlementIds, todaySettlement.id]))
+          rideIds = (todayRides || []).map((ride) => ride.id)
+          amount += todayAmount
+          description = amount > todayAmount ? "overdue and today's settlements" : "today's settlement"
+        }
+      }
+
       if (!settlementIds.length || amount <= 0) {
         return NextResponse.json({ error: "No settlement due" }, { status: 400 })
       }
+      if (!includeToday) description = "overdue settlements"
+    }
+
+    if (amount <= 0) {
+      return NextResponse.json({ error: "No remittance amount due" }, { status: 400 })
     }
 
     const { data: user } = await supabaseAdmin!
@@ -107,6 +192,7 @@ export async function POST(request: NextRequest) {
         metadata: {
           driverId: driver.id,
           settlementIds,
+          rideIds,
           type: "settlement_payment",
           returnUrl: mobileReturnUrl,
         },
@@ -134,6 +220,7 @@ export async function POST(request: NextRequest) {
         metadata: {
           paystack_access_code: paystackData.data.access_code,
           settlement_ids: settlementIds,
+          ride_ids: rideIds,
           return_url: mobileReturnUrl,
         },
       })
@@ -162,7 +249,7 @@ export async function POST(request: NextRequest) {
           reference: paystackData.data.reference,
           source: "payout",
           status: "pending",
-          description: `Settlement payment for ${requestedDate || 'outstanding settlements'}`,
+          description: `Settlement payment for ${description}`,
         })
 
       if (transactionError) {
@@ -178,7 +265,9 @@ export async function POST(request: NextRequest) {
       paymentId: payment.id,
       amount,
       settlementIds,
+      rideIds,
       requestedDate: requestedDate || null,
+      requestedRideId: requestedRideId || null,
       success: true,
     })
   } catch (error) {

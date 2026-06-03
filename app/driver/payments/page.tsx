@@ -1,431 +1,370 @@
 "use client"
 
-import { useSession } from "next-auth/react"
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { motion } from "framer-motion"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { ProtectedRoute } from "@/components/protected-route"
+import { AnimatedSidebar } from "@/components/animated-sidebar"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  CreditCard,
-  AlertTriangle,
-  CheckCircle,
-  Clock,
-  Download,
-  Lock,
-  Unlock,
-} from "lucide-react"
+import { AlertTriangle, CheckCircle, Clock, CreditCard, Loader, ReceiptText, RotateCcw, Wallet } from "lucide-react"
+import { toast } from "sonner"
 
-interface Settlement {
+type SettlementSummary = {
   id: string
   settlement_date: string
   total_rides: number
   total_platform_fees: number
-  settlement_status: "pending" | "paid" | "overdue"
-  payment_due_date: string
-  paid_at: string | null
+  settlement_status?: string
+  status?: string
+  payment_due_date?: string
+  paid_at?: string | null
 }
 
-interface Payment {
+type Payment = {
   id: string
   amount: number
   payment_method: string
+  payment_reference: string
   status: string
   payment_date: string
-  payment_reference: string
-  confirmed_at: string | null
+  confirmed_at?: string | null
+  description?: string
 }
 
-export default function DriverPaymentsPage() {
-  const { data: session } = useSession()
-  const [settlements, setSettlements] = useState<Settlement[]>([])
-  const [payments, setPayments] = useState<Payment[]>([])
-  const [totalPending, setTotalPending] = useState(0)
+function money(value: number | string | null | undefined) {
+  return `₦${Number(value || 0).toLocaleString("en-NG", { maximumFractionDigits: 0 })}`
+}
+
+function formatCountdown(ms: number) {
+  const safe = Math.max(Number(ms || 0), 0)
+  const hours = Math.floor(safe / 3_600_000)
+  const minutes = Math.floor((safe % 3_600_000) / 60_000)
+  return `${hours}h ${minutes}m`
+}
+
+function statusOf(settlement: SettlementSummary) {
+  return settlement.status || settlement.settlement_status || "pending"
+}
+
+function badgeClass(status: string) {
+  if (status === "paid") return "bg-emerald-100 text-emerald-800"
+  if (status === "overdue") return "bg-red-100 text-red-800"
+  return "bg-amber-100 text-amber-800"
+}
+
+function RemittancePageContent() {
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [processingPayment, setProcessingPayment] = useState(false)
-  const [selectedSettlements, setSelectedSettlements] = useState<string[]>([])
-  const isMountedRef = useRef(true)
+  const [processingRideId, setProcessingRideId] = useState<string | null>(null)
+  const [status, setStatus] = useState<any>(null)
+  const [daily, setDaily] = useState<any>(null)
+  const [payments, setPayments] = useState<Payment[]>([])
+  const [now, setNow] = useState(Date.now())
+
+  const outstanding: SettlementSummary[] = status?.outstandingSettlements || []
+  const totalOutstanding = Number(status?.totalOutstanding || 0)
+  const todayUnremitted = Number(daily?.totals?.unremittedPlatformFee || daily?.settlement?.outstandingPlatformFees || 0)
+  const totalDueNow = Number(status?.totalDueNow ?? (totalOutstanding + todayUnremitted))
+  const todayDate = daily?.date || new Date().toISOString().slice(0, 10)
+  const dueAt = daily?.due?.dueAt || status?.todayRemittance?.dueAt
+  const countdownMs = dueAt ? Math.max(new Date(dueAt).getTime() - now, 0) : Number(daily?.due?.millisecondsRemaining || 0)
+  const remittableRides = useMemo(
+    () => (daily?.rides || []).filter((ride: any) => !ride.remitted && Number(ride.platform_fee || 0) > 0),
+    [daily?.rides]
+  )
+
+  const fetchData = async () => {
+    try {
+      setRefreshing(true)
+      const [statusRes, dailyRes, paymentsRes] = await Promise.all([
+        fetch("/api/driver/settlement/status"),
+        fetch("/api/driver/settlement/daily"),
+        fetch("/api/driver/payments/history?limit=30"),
+      ])
+
+      const [statusData, dailyData, paymentsData] = await Promise.all([
+        statusRes.json(),
+        dailyRes.json(),
+        paymentsRes.json(),
+      ])
+
+      if (!statusRes.ok) throw new Error(statusData?.error || "Failed to fetch settlement status")
+      if (!dailyRes.ok) throw new Error(dailyData?.error || "Failed to fetch today's settlement")
+      if (!paymentsRes.ok) throw new Error(paymentsData?.error || "Failed to fetch payment history")
+
+      setStatus(statusData)
+      setDaily(dailyData)
+      setPayments(paymentsData.payments || [])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load remittance data")
+    } finally {
+      setRefreshing(false)
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    isMountedRef.current = true
-    return () => {
-      isMountedRef.current = false
-    }
+    fetchData()
   }, [])
 
   useEffect(() => {
-    if (!session?.user) return
+    const timer = setInterval(() => setNow(Date.now()), 60000)
+    return () => clearInterval(timer)
+  }, [])
 
-    const fetchPaymentStatus = async () => {
-      try {
-        const response = await fetch(
-          `/api/driver/payment-status?driver_id=${(session?.user as any)?.id}`
-        )
-        const data = await response.json()
-
-        if (isMountedRef.current) {
-          setSettlements(data.settlements || [])
-          setPayments(data.payments || [])
-          setTotalPending(data.totalPending || 0)
-        }
-      } catch (error) {
-        console.error("Error fetching payment status:", error)
-      } finally {
-        if (isMountedRef.current) {
-          setLoading(false)
-        }
-      }
-    }
-
-    fetchPaymentStatus()
-  }, [session?.user])
-
-  const handleInitiatePayment = async () => {
-    if (!selectedSettlements.length) {
-      alert("Please select at least one settlement to pay")
-      return
-    }
-
-    const amount = settlements
-      .filter((s) => selectedSettlements.includes(s.id))
-      .reduce((sum, s) => sum + s.total_platform_fees, 0)
-
-    setProcessingPayment(true)
-
+  const initiatePayment = async (date?: string, rideId?: string) => {
     try {
-      const response = await fetch("/api/driver/initiate-payment", {
+      if (rideId) setProcessingRideId(rideId)
+      setProcessingPayment(true)
+      const response = await fetch("/api/driver/settlement/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          driverId: (session?.user as any)?.id,
-          settlementIds: selectedSettlements,
-          amount,
+          date,
+          rideId,
+          includeToday: !date && !rideId,
+          returnUrl: `${window.location.origin}/driver/payments`,
         }),
       })
-
       const data = await response.json()
-
-      if (data.success && data.authUrl) {
-        // Redirect to Paystack payment
-        window.location.href = data.authUrl
-      } else {
-        alert("Failed to initiate payment: " + data.error)
+      if (!response.ok || !data?.authUrl) {
+        throw new Error(data?.error || "Unable to start payment")
       }
+      window.location.href = data.authUrl
     } catch (error) {
-      console.error("Error initiating payment:", error)
-      alert("Failed to initiate payment")
+      toast.error(error instanceof Error ? error.message : "Unable to start payment")
     } finally {
       setProcessingPayment(false)
-    }
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "paid":
-        return "bg-green-100 text-green-800"
-      case "pending":
-        return "bg-yellow-100 text-yellow-800"
-      case "overdue":
-        return "bg-red-100 text-red-800"
-      default:
-        return "bg-gray-100 text-gray-800"
-    }
-  }
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "paid":
-        return <CheckCircle className="w-4 h-4" />
-      case "pending":
-        return <Clock className="w-4 h-4" />
-      case "overdue":
-        return <AlertTriangle className="w-4 h-4" />
-      default:
-        return null
+      setProcessingRideId(null)
     }
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader className="h-8 w-8 animate-spin" />
       </div>
     )
   }
 
-  const pendingSettlements = settlements.filter((s) => s.settlement_status === "pending")
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 md:p-8">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2">
-            Payment Management
-          </h1>
-          <p className="text-gray-600">
-            Track your daily settlements and payment history
-          </p>
-        </div>
+    <div className="flex min-h-screen bg-background pb-24 lg:pb-0">
+      <AnimatedSidebar />
+      <main className="flex-1 pt-16 lg:pt-0">
+        <div className="p-4 md:p-6 lg:p-8 space-y-6">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h1 className="text-2xl md:text-3xl font-serif font-bold">Remittance</h1>
+              <p className="text-muted-foreground">
+                Track platform fees, reminders, payments, and availability locks.
+              </p>
+            </div>
+            <Button onClick={fetchData} disabled={refreshing} variant="outline" className="gap-2">
+              <RotateCcw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
 
-        {/* Total Pending Card */}
-        {totalPending > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-6"
-          >
-            <Card className="bg-red-50 border-red-200">
+          {status?.blocked ? (
+            <Card className="border-red-200 bg-red-50">
               <CardContent className="pt-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                      <AlertTriangle className="w-5 h-5 text-red-600" />
-                      Total Amount Due
-                    </h2>
-                    <p className="text-3xl font-bold text-red-600 mt-2">
-                      ₦{totalPending.toLocaleString("en-NG")}
-                    </p>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Pay before {new Date(Math.max(...pendingSettlements.map((s) => new Date(s.payment_due_date).getTime()))).toLocaleDateString()} to avoid penalty
-                    </p>
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-1 h-5 w-5 text-red-600" />
+                    <div>
+                      <h2 className="font-semibold text-red-900">Availability locked by remittance</h2>
+                      <p className="text-sm text-red-700">
+                        Pay {money(totalDueNow)} before accepting new rides.
+                      </p>
+                    </div>
                   </div>
-                  <Button
-                    onClick={handleInitiatePayment}
-                    disabled={!pendingSettlements.length || processingPayment}
-                    className="bg-red-600 hover:bg-red-700 text-white"
-                  >
-                    {processingPayment ? "Processing..." : "Pay Now"}
+                  <Button onClick={() => initiatePayment()} disabled={processingPayment || !totalDueNow}>
+                    {processingPayment ? "Starting payment..." : "Pay Remittance"}
                   </Button>
                 </div>
               </CardContent>
             </Card>
-          </motion.div>
-        )}
+          ) : null}
 
-        {/* Tabs */}
-        <Tabs defaultValue="pending" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 mb-6">
-            <TabsTrigger value="pending">
-              Pending ({pendingSettlements.length})
-            </TabsTrigger>
-            <TabsTrigger value="paid">
-              Paid ({settlements.filter((s) => s.settlement_status === "paid").length})
-            </TabsTrigger>
-            <TabsTrigger value="history">Payment History</TabsTrigger>
-          </TabsList>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Card>
+              <CardContent className="p-5">
+                <Wallet className="mb-3 h-5 w-5 text-primary" />
+                <p className="text-sm text-muted-foreground">Today's gross rides</p>
+                <p className="mt-1 text-2xl font-bold">{money(daily?.totals?.grossAmount)}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5">
+                <CreditCard className="mb-3 h-5 w-5 text-primary" />
+                <p className="text-sm text-muted-foreground">Today's platform fee</p>
+                <p className="mt-1 text-2xl font-bold">{money(todayUnremitted)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">Due in {formatCountdown(countdownMs)}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5">
+                <AlertTriangle className="mb-3 h-5 w-5 text-red-500" />
+                <p className="text-sm text-muted-foreground">Overdue lock amount</p>
+                <p className="mt-1 text-2xl font-bold text-red-600">{money(totalOutstanding)}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5">
+                <CheckCircle className="mb-3 h-5 w-5 text-emerald-500" />
+                <p className="text-sm text-muted-foreground">Availability</p>
+                <p className="mt-1 text-2xl font-bold">{status?.blocked ? "Locked" : "Clear"}</p>
+              </CardContent>
+            </Card>
+          </div>
 
-          {/* Pending Settlements */}
-          <TabsContent value="pending" className="space-y-4">
-            {pendingSettlements.length === 0 ? (
+          <Tabs defaultValue="today" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="today">Today ({remittableRides.length})</TabsTrigger>
+              <TabsTrigger value="outstanding">Outstanding ({outstanding.length})</TabsTrigger>
+              <TabsTrigger value="history">Payments</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="today" className="space-y-4">
               <Card>
-                <CardContent className="pt-6 text-center text-gray-600">
-                  <CheckCircle className="w-12 h-12 text-green-600 mx-auto mb-4" />
-                  <p>No pending settlements! All fees are paid.</p>
-                </CardContent>
-              </Card>
-            ) : (
-              pendingSettlements.map((settlement) => (
-                <motion.div
-                  key={settlement.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                >
-                  <Card className="hover:shadow-lg transition-shadow">
-                    <CardContent className="pt-6">
-                      <div className="flex items-start justify-between mb-4">
+                <CardHeader>
+                  <CardTitle>Today's Accepted Rides</CardTitle>
+                  <CardDescription>Used to calculate daily platform remittance.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {remittableRides.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No unremitted rides recorded for today.</p>
+                  ) : (
+                    <>
+                      <div className="flex flex-col gap-3 rounded-lg border bg-primary/5 p-4 md:flex-row md:items-center md:justify-between">
                         <div>
-                          <h3 className="font-semibold text-gray-900">
-                            Settlement for {new Date(settlement.settlement_date).toLocaleDateString()}
-                          </h3>
-                          <p className="text-sm text-gray-600 mt-1">
-                            {settlement.total_rides} rides completed
+                          <p className="font-semibold">Pay all today's ride remittance</p>
+                          <p className="text-sm text-muted-foreground">
+                            {remittableRides.length} rides • due in {formatCountdown(countdownMs)}
                           </p>
                         </div>
-                        <Badge className={getStatusColor(settlement.settlement_status)}>
-                          {getStatusIcon(settlement.settlement_status)}
-                          <span className="ml-2">{settlement.settlement_status.toUpperCase()}</span>
-                        </Badge>
+                        <Button onClick={() => initiatePayment(todayDate)} disabled={processingPayment}>
+                          Pay {money(todayUnremitted)}
+                        </Button>
                       </div>
-
-                      <div className="grid grid-cols-2 gap-4 mb-4 py-4 border-y">
-                        <div>
-                          <p className="text-sm text-gray-600">Platform Fees</p>
-                          <p className="text-lg font-semibold text-gray-900">
-                            ₦{settlement.total_platform_fees.toLocaleString("en-NG")}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Due Date</p>
-                          <p className="text-lg font-semibold text-gray-900">
-                            {new Date(settlement.payment_due_date).toLocaleDateString()}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={selectedSettlements.includes(settlement.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedSettlements([
-                                ...selectedSettlements,
-                                settlement.id,
-                              ])
-                            } else {
-                              setSelectedSettlements(
-                                selectedSettlements.filter((id) => id !== settlement.id)
-                              )
-                            }
-                          }}
-                          className="w-4 h-4 rounded"
-                        />
-                        <label className="text-sm text-gray-600">
-                          Include in payment
-                        </label>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ))
-            )}
-          </TabsContent>
-
-          {/* Paid Settlements */}
-          <TabsContent value="paid" className="space-y-4">
-            {settlements.filter((s) => s.settlement_status === "paid").length === 0 ? (
-              <Card>
-                <CardContent className="pt-6 text-center text-gray-600">
-                  <Clock className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p>No paid settlements yet</p>
-                </CardContent>
-              </Card>
-            ) : (
-              settlements
-                .filter((s) => s.settlement_status === "paid")
-                .map((settlement) => (
-                  <motion.div
-                    key={settlement.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                  >
-                    <Card className="border-green-200 bg-green-50">
-                      <CardContent className="pt-6">
-                        <div className="flex items-start justify-between">
+                      {remittableRides.map((ride: any) => (
+                      <div key={ride.id} className="rounded-lg border p-4">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                           <div>
-                            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                              <CheckCircle className="w-5 h-5 text-green-600" />
-                              Settlement for {new Date(settlement.settlement_date).toLocaleDateString()}
-                            </h3>
-                            <p className="text-sm text-gray-600 mt-1">
-                              Paid on {settlement.paid_at ? new Date(settlement.paid_at).toLocaleDateString() : "N/A"}
+                            <p className="font-semibold">{ride.pickup_zone} → {ride.destination_zone}</p>
+                            <p className="text-xs text-muted-foreground capitalize">
+                              {ride.status} • {ride.remitted ? "remitted" : "not remitted"}
                             </p>
                           </div>
-                          <Badge className="bg-green-100 text-green-800">
-                            PAID
-                          </Badge>
+                          <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4 md:items-center">
+                            <span>{money(ride.fare_amount)}</span>
+                            <span className="text-red-600">Fee {money(ride.platform_fee)}</span>
+                            <span className="text-emerald-600">Earn {money(ride.driver_earnings)}</span>
+                            <Button
+                              size="sm"
+                              onClick={() => initiatePayment(undefined, ride.id)}
+                              disabled={processingPayment}
+                            >
+                              {processingRideId === ride.id ? "Starting..." : "Pay ride"}
+                            </Button>
+                          </div>
                         </div>
+                      </div>
+                      ))}
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
 
-                        <div className="grid grid-cols-2 gap-4 mt-4 py-4 border-t">
+            <TabsContent value="outstanding" className="space-y-4">
+              {outstanding.length === 0 ? (
+                <Card>
+                  <CardContent className="p-8 text-center">
+                    <CheckCircle className="mx-auto mb-3 h-10 w-10 text-emerald-500" />
+                    <p className="font-semibold">No outstanding remittance</p>
+                    <p className="text-sm text-muted-foreground">You are clear to accept rides.</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                outstanding.map((settlement) => (
+                  <motion.div key={settlement.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+                    <Card>
+                      <CardContent className="p-5">
+                        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                           <div>
-                            <p className="text-sm text-gray-600">Platform Fees</p>
-                            <p className="text-lg font-semibold text-green-600">
-                              ₦{settlement.total_platform_fees.toLocaleString("en-NG")}
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-semibold">
+                                {new Date(settlement.settlement_date).toLocaleDateString()}
+                              </h3>
+                              <Badge className={badgeClass(statusOf(settlement))}>{statusOf(settlement)}</Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {settlement.total_rides || 0} rides • due {settlement.payment_due_date ? new Date(settlement.payment_due_date).toLocaleDateString() : "soon"}
                             </p>
                           </div>
-                          <div>
-                            <p className="text-sm text-gray-600">Rides</p>
-                            <p className="text-lg font-semibold text-gray-900">
-                              {settlement.total_rides}
-                            </p>
+                          <div className="flex flex-col gap-2 md:items-end">
+                            <p className="text-2xl font-bold">{money(settlement.total_platform_fees)}</p>
+                            <Button onClick={() => initiatePayment(settlement.settlement_date)} disabled={processingPayment}>
+                              Pay this day
+                            </Button>
                           </div>
                         </div>
                       </CardContent>
                     </Card>
                   </motion.div>
                 ))
-            )}
-          </TabsContent>
+              )}
+            </TabsContent>
 
-          {/* Payment History */}
-          <TabsContent value="history" className="space-y-4">
-            {payments.length === 0 ? (
-              <Card>
-                <CardContent className="pt-6 text-center text-gray-600">
-                  <CreditCard className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p>No payment history yet</p>
-                </CardContent>
-              </Card>
-            ) : (
-              payments.map((payment) => (
-                <motion.div
-                  key={payment.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                >
-                  <Card>
-                    <CardContent className="pt-6">
-                      <div className="flex items-start justify-between mb-4">
-                        <div>
-                          <h3 className="font-semibold text-gray-900">
-                            {payment.payment_method === "paystack"
-                              ? "Paystack Payment"
-                              : "Bank Transfer"}
-                          </h3>
-                          <p className="text-sm text-gray-600 mt-1">
-                            {new Date(payment.payment_date).toLocaleDateString()}
-                          </p>
+            <TabsContent value="history" className="space-y-4">
+              {payments.length === 0 ? (
+                <Card>
+                  <CardContent className="p-8 text-center">
+                    <ReceiptText className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
+                    <p className="font-semibold">No remittance payments yet</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                payments.map((payment) => (
+                  <Card key={payment.id}>
+                    <CardContent className="p-5">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div className="flex items-start gap-3">
+                          <Clock className="mt-1 h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-semibold">{payment.description || "Settlement payment"}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {new Date(payment.payment_date).toLocaleString()} • {payment.payment_reference}
+                            </p>
+                          </div>
                         </div>
-                        <Badge
-                          className={
-                            payment.status === "completed"
-                              ? "bg-green-100 text-green-800"
-                              : payment.status === "pending"
-                              ? "bg-yellow-100 text-yellow-800"
-                              : "bg-red-100 text-red-800"
-                          }
-                        >
-                          {payment.status.toUpperCase()}
-                        </Badge>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4 py-4 border-y mb-4">
-                        <div>
-                          <p className="text-sm text-gray-600">Amount</p>
-                          <p className="text-lg font-semibold text-gray-900">
-                            ₦{payment.amount.toLocaleString("en-NG")}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Reference</p>
-                          <p className="text-sm font-mono text-gray-600 break-all">
-                            {payment.payment_reference}
-                          </p>
+                        <div className="flex items-center gap-3">
+                          <p className="font-bold">{money(payment.amount)}</p>
+                          <Badge className={payment.status === "completed" ? "bg-emerald-100 text-emerald-800" : payment.status === "failed" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}>
+                            {payment.status}
+                          </Badge>
                         </div>
                       </div>
-
-                      {payment.status === "completed" && (
-                        <p className="text-sm text-green-600">
-                          ✓ Confirmed on {payment.confirmed_at ? new Date(payment.confirmed_at).toLocaleDateString() : "N/A"}
-                        </p>
-                      )}
                     </CardContent>
                   </Card>
-                </motion.div>
-              ))
-            )}
-          </TabsContent>
-        </Tabs>
-      </div>
+                ))
+              )}
+            </TabsContent>
+          </Tabs>
+        </div>
+      </main>
     </div>
+  )
+}
+
+export default function DriverPaymentsPage() {
+  return (
+    <ProtectedRoute allowedRoles={["driver"]}>
+      <RemittancePageContent />
+    </ProtectedRoute>
   )
 }
