@@ -39,12 +39,41 @@ const applyCorsHeaders = (response: NextResponse, request: NextRequest) => {
   return response;
 };
 
+const BLOCKED_SCANNER_PATHS = [
+  "/wp-admin",
+  "/wp-login.php",
+  "/wp-content",
+  "/wordpress",
+  "/xmlrpc.php",
+  "/phpmyadmin",
+  "/phpMyAdmin",
+  "/adminer.php",
+  "/.env",
+  "/.git",
+];
+
+const isScannerPath = (pathname: string) => {
+  const normalized = pathname.toLowerCase();
+
+  return BLOCKED_SCANNER_PATHS.some((path) => normalized === path.toLowerCase() || normalized.startsWith(`${path.toLowerCase()}/`));
+};
+
 /**
  * Proxy to protect routes and enforce role-based access
  * Note: NextAuth session checks are done client-side via auth context
  */
 export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+
+  if (isScannerPath(pathname)) {
+    return new NextResponse("Not found", {
+      status: 404,
+      headers: {
+        "Cache-Control": "public, max-age=3600",
+        "X-Robots-Tag": "noindex",
+      },
+    });
+  }
 
   if (pathname.startsWith("/api/")) {
     if (request.method === "OPTIONS") {
