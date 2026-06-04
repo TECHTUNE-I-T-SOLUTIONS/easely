@@ -211,6 +211,54 @@ export async function getOutstandingSettlements(driverId: string) {
   return settlements || []
 }
 
+export async function getDriverRemittanceSummary(driverId: string) {
+  const todayRange = getDateRangeForOffset(0)
+  await updateOverdueSettlements(driverId)
+  const todaySettlement = await upsertSettlementForDate(driverId, todayRange.dateString)
+  const outstandingSettlements = await getOutstandingSettlements(driverId)
+
+  const overdueTotal = outstandingSettlements.reduce(
+    (sum, entry) => sum + Number(entry.total_platform_fees || 0),
+    0
+  )
+
+  const { data: todayRides, error: todayRidesError } = await supabaseAdmin
+    .from("rides")
+    .select("id, platform_fee, remitted")
+    .eq("driver_id", driverId)
+    .in("status", ["accepted", "in_progress", "completed"])
+    .eq("remitted", false)
+    .gte("updated_at", todayRange.start.toISOString())
+    .lt("updated_at", todayRange.end.toISOString())
+
+  if (todayRidesError) {
+    throw todayRidesError
+  }
+
+  const todayTotal = (todayRides || []).reduce(
+    (sum, ride) => sum + Number(ride.platform_fee || 0),
+    0
+  )
+  const now = Date.now()
+  const millisecondsUntilTodayDue = Math.max(todayRange.end.getTime() - now, 0)
+
+  return {
+    blocked: overdueTotal > 0,
+    overdueTotal,
+    todayTotal,
+    grandTotal: overdueTotal + todayTotal,
+    outstandingSettlements,
+    todaySettlement,
+    todayRemittance: {
+      totalDue: todayTotal,
+      ridesDue: todayRides?.length || 0,
+      dueAt: todayRange.end.toISOString(),
+      millisecondsRemaining: millisecondsUntilTodayDue,
+      isOverdue: millisecondsUntilTodayDue <= 0 && todayTotal > 0,
+    },
+  }
+}
+
 export function summarizeSettlement(settlement: any): DriverSettlementSummary {
   return {
     settlementDate: settlement.settlement_date,

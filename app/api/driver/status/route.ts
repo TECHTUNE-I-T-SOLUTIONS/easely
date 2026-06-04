@@ -5,7 +5,7 @@ import {
   getDateRangeForOffset,
   upsertSettlementForDate,
   updateOverdueSettlements,
-  getOutstandingSettlements,
+  getDriverRemittanceSummary,
 } from "@/lib/driver-settlement"
 
 const supabase = createClient(
@@ -163,20 +163,15 @@ export async function GET(request: NextRequest) {
       console.error("[DriverStatus] Error in auto-verification:", verifyError)
     }
 
-    await updateOverdueSettlements(driver.id)
     const { dateString } = getDateRangeForOffset(-1)
     await upsertSettlementForDate(driver.id, dateString)
-    const outstanding = await getOutstandingSettlements(driver.id)
-    const totalOutstanding = outstanding.reduce(
-      (sum, entry) => sum + Number(entry.total_platform_fees || 0),
-      0
-    )
+    const remittance = await getDriverRemittanceSummary(driver.id)
 
     let status = driver.availability_status || "offline"
     let updatedAt = driver.updated_at
     const manualOff = Boolean((driver as any).manual_availability_off)
 
-    if (totalOutstanding > 0) {
+    if (remittance.blocked) {
       if (status !== "offline") {
         const update = await updateDriverAvailability(session.user.id, "offline")
         if (!update.error) {
@@ -202,8 +197,19 @@ export async function GET(request: NextRequest) {
       status,
       updatedAt,
       driverId: driver.id,
-      blocked: totalOutstanding > 0,
-      totalOutstanding,
+      blocked: remittance.blocked,
+      totalOverdue: remittance.overdueTotal,
+      totalOutstanding: remittance.overdueTotal,
+      totalTodayDue: remittance.todayTotal,
+      totalDueNow: remittance.grandTotal,
+      remittanceSummary: {
+        overdueTotal: remittance.overdueTotal,
+        todayTotal: remittance.todayTotal,
+        grandTotal: remittance.grandTotal,
+        todayRemittance: remittance.todayRemittance,
+        timezone: "Africa/Lagos",
+        serverTime: new Date().toISOString(),
+      },
       manualAvailabilityOff: manualOff,
     })
   } catch (error) {
@@ -250,19 +256,24 @@ export async function PUT(request: NextRequest) {
     }
 
     if (status === "online") {
-      await updateOverdueSettlements(driverRecord.id)
-      const outstanding = await getOutstandingSettlements(driverRecord.id)
-      const totalOutstanding = outstanding.reduce(
-        (sum, entry) => sum + Number(entry.total_platform_fees || 0),
-        0
-      )
+      const remittance = await getDriverRemittanceSummary(driverRecord.id)
 
-      if (totalOutstanding > 0) {
+      if (remittance.blocked) {
         return NextResponse.json(
           {
             error: "Outstanding settlements must be paid before going online",
             code: "settlement_overdue",
-            totalOutstanding,
+            totalOverdue: remittance.overdueTotal,
+            totalOutstanding: remittance.overdueTotal,
+            totalTodayDue: remittance.todayTotal,
+            totalDueNow: remittance.grandTotal,
+            remittanceSummary: {
+              overdueTotal: remittance.overdueTotal,
+              todayTotal: remittance.todayTotal,
+              grandTotal: remittance.grandTotal,
+              timezone: "Africa/Lagos",
+              serverTime: new Date().toISOString(),
+            },
           },
           { status: 403 }
         )

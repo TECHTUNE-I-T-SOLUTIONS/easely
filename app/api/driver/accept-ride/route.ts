@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
 import { acceptRideFirstCome } from "@/lib/ride-acceptance";
-import { getOutstandingSettlements, updateOverdueSettlements } from "@/lib/driver-settlement";
+import { getDriverRemittanceSummary } from "@/lib/driver-settlement";
 import { supabaseAdmin } from "@/lib/supabase";
 import { sendPushNotification } from "@/lib/push-service";
 
@@ -36,19 +36,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await updateOverdueSettlements(driver.id);
-    const outstanding = await getOutstandingSettlements(driver.id);
-    const totalOutstanding = outstanding.reduce(
-      (sum, entry) => sum + Number(entry.total_platform_fees || 0),
-      0
-    );
+    const remittance = await getDriverRemittanceSummary(driver.id);
 
-    if (totalOutstanding > 0) {
+    if (remittance.blocked) {
       return NextResponse.json(
         {
           error: "Outstanding settlements must be paid before accepting rides",
           code: "settlement_overdue",
-          totalOutstanding,
+          totalOverdue: remittance.overdueTotal,
+          totalOutstanding: remittance.overdueTotal,
+          totalTodayDue: remittance.todayTotal,
+          totalDueNow: remittance.grandTotal,
+          remittanceSummary: {
+            overdueTotal: remittance.overdueTotal,
+            todayTotal: remittance.todayTotal,
+            grandTotal: remittance.grandTotal,
+            timezone: "Africa/Lagos",
+            serverTime: new Date().toISOString(),
+          },
         },
         { status: 403 }
       );
