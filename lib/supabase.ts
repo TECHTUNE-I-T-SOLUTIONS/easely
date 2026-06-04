@@ -26,8 +26,6 @@ export type Database = {
           last_name: string;
           phone_number: string;
           email: string;
-          dob: string | null;
-          gender: string | null;
           role: "user" | "driver" | "admin" | "super_admin";
           status: "active" | "suspended" | "pending";
           emergency_contact: string | null;

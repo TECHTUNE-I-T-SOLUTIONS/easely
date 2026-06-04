@@ -24,8 +24,6 @@ export async function POST(request: NextRequest) {
     const email = formData.get("email") as string;
     const phone = formData.get("phone") as string;
     const password = formData.get("password") as string;
-    const dob = formData.get("dob") as string;
-    const gender = formData.get("gender") as string;
     const role = (formData.get("role") as string) || "user";
     const homeAddress = ((formData.get("homeAddress") as string) || "").trim();
     const workAddress = ((formData.get("workAddress") as string) || "").trim();
@@ -184,8 +182,6 @@ export async function POST(request: NextRequest) {
       email,
       phone_number: phone,
       password_hash: hashedPassword,
-      dob: dob || null,
-      gender: gender || null,
       profile_picture_url: profilePictureUrl,
       role,
       status: "active",
@@ -353,8 +349,6 @@ export async function POST(request: NextRequest) {
           firstName: newUser.first_name,
           lastName: newUser.last_name,
           phone: newUser.phone_number,
-          dob: newUser.dob,
-          gender: newUser.gender,
           profilePictureUrl: newUser.profile_picture_url,
           homeAddress: (newUser as any).home_address || "",
           workAddress: (newUser as any).work_address || "",

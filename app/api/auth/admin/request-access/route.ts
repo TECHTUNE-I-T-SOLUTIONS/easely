@@ -18,8 +18,6 @@ export async function POST(request: NextRequest) {
       email,
       phone,
       password,
-      dob,
-      gender,
       emergencyContact,
       emergencyPhone,
       adminLevel = "support",
@@ -34,8 +32,6 @@ export async function POST(request: NextRequest) {
       !email ||
       !phone ||
       !password ||
-      !dob ||
-      !gender ||
       !emergencyContact ||
       !emergencyPhone ||
       !adminLevel ||
@@ -103,8 +99,6 @@ export async function POST(request: NextRequest) {
           first_name: firstName,
           last_name: lastName,
           password_hash: passwordHash,
-          dob: dob || null,
-          gender: gender || null,
           emergency_contact: emergencyContact,
           emergency_phone: emergencyPhone,
           role: "admin",

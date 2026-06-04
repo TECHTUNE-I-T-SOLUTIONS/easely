@@ -59,8 +59,6 @@ const handler = NextAuth({
             status: user.status,
             image: user.profile_picture_url,
             profilePictureUrl: user.profile_picture_url,
-            dob: user.dob,
-            gender: user.gender,
             profileComplete: user.profile_complete,
             createdAt: user.created_at,
           };
@@ -81,8 +79,6 @@ const handler = NextAuth({
         token.role = user.role;
         token.email = user.email;
         token.profilePictureUrl = user.profilePictureUrl;
-        token.dob = user.dob;
-        token.gender = user.gender;
         token.profileComplete = user.profileComplete;
         token.createdAt = user.createdAt;
         token.status = user.status;
@@ -97,8 +93,6 @@ const handler = NextAuth({
         session.user.phone = token.phone;
         session.user.role = token.role;
         session.user.profilePictureUrl = token.profilePictureUrl;
-        session.user.dob = token.dob;
-        session.user.gender = token.gender;
         session.user.profileComplete = token.profileComplete;
         session.user.createdAt = token.createdAt;
         session.user.status = token.status;

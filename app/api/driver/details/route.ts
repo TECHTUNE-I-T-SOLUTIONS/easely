@@ -22,9 +22,7 @@ export async function GET(request: NextRequest) {
           last_name,
           email,
           phone_number,
-          profile_picture_url,
-          dob,
-          gender
+          profile_picture_url
         )
       `)
       .eq("user_id", session.user.id)

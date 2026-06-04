@@ -14,8 +14,6 @@ export async function POST(request: NextRequest) {
     }
 
     const formData = await request.formData();
-    const dob = formData.get("dob") as string;
-    const gender = formData.get("gender") as string;
     const profilePictureFile = formData.get("profile_picture") as File | null;
     const vehicleType = formData.get("vehicle_type") as string | null;
     const plateNumber = formData.get("plate_number") as string | null;
@@ -76,8 +74,6 @@ export async function POST(request: NextRequest) {
     const { error: userError } = await supabaseAdmin
       .from("users")
       .update({
-        dob: dob || null,
-        gender: gender || null,
         profile_picture_url: profilePictureUrl,
         profile_complete: true,
         status: "active",
