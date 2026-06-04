@@ -38,6 +38,12 @@ export async function POST(request: NextRequest) {
     const unionName = formData.get("unionName") as string;
     const bankName = formData.get("bankName") as string;
     const bankAccountNumber = formData.get("bankAccountNumber") as string;
+    const accountName = (
+      (formData.get("accountName") as string) ||
+      (formData.get("bankAccountName") as string) ||
+      (formData.get("accountHolder") as string) ||
+      ""
+    ).trim();
     const emergencyContact = formData.get("emergencyContact") as string;
     const operatingZones = ((formData.get("operatingZones") as string) || "").trim();
 
@@ -186,22 +192,7 @@ export async function POST(request: NextRequest) {
       profile_complete: true,
       emergency_contact: emergencyContactName || null,
       emergency_phone: emergencyContactPhone || null,
-      home_address: homeAddress || null,
-      work_address: workAddress || null,
     };
-
-    if (role === "driver") {
-      createPayload.vehicle_type = vehicleType || null;
-      createPayload.plate_number = plateNumber || null;
-      createPayload.union_name = unionName || null;
-      createPayload.operating_zones = operatingZones
-        ? operatingZones.split(",").map((zone) => zone.trim()).filter(Boolean)
-        : null;
-      createPayload.bank_name = bankName || null;
-      createPayload.bank_account_number = bankAccountNumber || null;
-      createPayload.vehicle_picture_url = vehiclePictureUrl;
-      createPayload.license_picture_url = licensePictureUrl;
-    }
 
     let { data: newUser, error: createError } = await supabase
       .from("users")
@@ -314,6 +305,7 @@ export async function POST(request: NextRequest) {
           : [],
         bank_name: bankName || null,
         bank_account_number: bankAccountNumber || null,
+        account_name: accountName || null,
         emergency_contact: driverEmergencyContact,
         vehicle_picture_url: vehiclePictureUrl,
         license_picture_url: licensePictureUrl,
