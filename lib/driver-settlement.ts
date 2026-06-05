@@ -224,10 +224,11 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
 
   const { start: rangeStart, end: rangeEnd } = getLagosDayRange(dateString)
 
-  // Query rides directly - these are rides the driver actually accepted/completed
+  // Query rides directly. Total fare/earnings describe the day; platform fee due
+  // must only count rides that have not already been remitted.
   const { data: rides, error: ridesError } = await supabaseAdmin
     .from("rides")
-    .select("id, fare_amount, platform_fee, driver_earnings, status, updated_at, created_at")
+    .select("id, fare_amount, platform_fee, driver_earnings, status, updated_at, created_at, remitted")
     .eq("driver_id", driverId)
     .in("status", ["accepted", "in_progress", "completed"])
     .gte("updated_at", rangeStart.toISOString())
@@ -239,7 +240,7 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
 
   let totalRides = 0
   let totalFareAmount = 0
-  let totalPlatformFees = 0
+  let totalUnremittedPlatformFees = 0
   let totalDriverEarnings = 0
 
   for (const ride of rides || []) {
@@ -250,7 +251,9 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
     const driverEarning = Number(ride.driver_earnings ?? fare - platformFee)
 
     totalFareAmount += fare
-    totalPlatformFees += platformFee
+    if (!ride.remitted) {
+      totalUnremittedPlatformFees += platformFee
+    }
     totalDriverEarnings += driverEarning
   }
 
@@ -268,11 +271,13 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
     throw existingError
   }
 
-  const computedStatus: SettlementStatus = totalPlatformFees > 0 ? "pending" : "paid"
+  const computedStatus: SettlementStatus = totalUnremittedPlatformFees > 0 ? "pending" : "paid"
 
-  // Preserve 'paid' status if already paid; otherwise use computed status
+  // Keep paid only when there are no unremitted rides left. If a driver pays
+  // earlier and accepts more rides later, the same date becomes pending again
+  // for only those new unremitted rides.
   const settlementStatusToSave: SettlementStatus = existingSettlement
-    ? (existingSettlement.settlement_status === "paid" ? "paid" : computedStatus)
+    ? (existingSettlement.settlement_status === "paid" && totalUnremittedPlatformFees <= 0 ? "paid" : computedStatus)
     : computedStatus
 
   if (existingSettlement) {
@@ -281,7 +286,7 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
       .update({
         total_rides: totalRides,
         total_fare_amount: totalFareAmount,
-        total_platform_fees: totalPlatformFees,
+        total_platform_fees: totalUnremittedPlatformFees,
         total_driver_earnings: totalDriverEarnings,
         settlement_status: settlementStatusToSave,
         payment_due_date: paymentDueDate,
@@ -310,7 +315,7 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
         settlement_date: dateString,
         total_rides: totalRides,
         total_fare_amount: totalFareAmount,
-        total_platform_fees: totalPlatformFees,
+        total_platform_fees: totalUnremittedPlatformFees,
         total_driver_earnings: totalDriverEarnings,
         settlement_status: settlementStatusToSave,
         payment_due_date: paymentDueDate,
@@ -336,14 +341,16 @@ export async function upsertSettlementForDate(driverId: string, dateString: stri
     if (racedFetchError) throw racedFetchError
 
     const racedStatusToSave: SettlementStatus =
-      racedSettlement.settlement_status === "paid" ? "paid" : settlementStatusToSave
+      racedSettlement.settlement_status === "paid" && totalUnremittedPlatformFees <= 0
+        ? "paid"
+        : settlementStatusToSave
 
     const { data: updatedAfterRace, error: racedUpdateError } = await supabaseAdmin
       .from("driver_daily_settlement")
       .update({
         total_rides: totalRides,
         total_fare_amount: totalFareAmount,
-        total_platform_fees: totalPlatformFees,
+        total_platform_fees: totalUnremittedPlatformFees,
         total_driver_earnings: totalDriverEarnings,
         settlement_status: racedStatusToSave,
         payment_due_date: paymentDueDate,
@@ -386,7 +393,6 @@ export async function getOutstandingSettlements(driverId: string) {
     .select("id, settlement_date, total_platform_fees, settlement_status, payment_due_date")
     .eq("driver_id", driverId)
     .lt("settlement_date", today)
-    .in("settlement_status", ["pending", "overdue"])
     .order("settlement_date", { ascending: false })
 
   if (error) {
@@ -418,6 +424,7 @@ export async function getOutstandingSettlements(driverId: string) {
       await supabaseAdmin
         .from("driver_daily_settlement")
         .update({
+          total_platform_fees: 0,
           settlement_status: "paid",
           paid_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -427,10 +434,23 @@ export async function getOutstandingSettlements(driverId: string) {
       continue
     }
 
+    const correctedStatus: SettlementStatus = "overdue"
+    await supabaseAdmin
+      .from("driver_daily_settlement")
+      .update({
+        total_platform_fees: outstandingPlatformFees,
+        settlement_status: correctedStatus,
+        paid_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", settlement.id)
+      .eq("driver_id", driverId)
+
     resolvedSettlements.push({
       ...settlement,
       total_platform_fees: outstandingPlatformFees,
       outstanding_platform_fees: outstandingPlatformFees,
+      settlement_status: correctedStatus,
       unpaid_ride_count: unpaidRides?.length || 0,
     })
   }

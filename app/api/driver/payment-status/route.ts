@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
-import { verifyDriverPaymentReference } from "@/lib/driver-settlement"
+import { getDriverRemittanceSummary, verifyDriverPaymentReference } from "@/lib/driver-settlement"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -10,16 +10,22 @@ const supabase = createClient(
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const driverId = searchParams.get("driver_id")
+    const driverIdParam = searchParams.get("driver_id")
 
-    if (!driverId) {
-      return NextResponse.json(
-        { error: "Driver ID required" },
-        { status: 400 }
-      )
+    if (!driverIdParam) {
+      return NextResponse.json({ error: "Driver ID required" }, { status: 400 })
     }
 
-    // Get pending settlements with payment reminders
+    const { data: driverRecord, error: driverError } = await supabase
+      .from("drivers")
+      .select("id, user_id")
+      .or(`id.eq.${driverIdParam},user_id.eq.${driverIdParam}`)
+      .maybeSingle()
+
+    if (driverError) throw driverError
+
+    const resolvedDriverId = driverRecord?.id || driverIdParam
+
     const { data: settlements, error } = await supabase
       .from("driver_daily_settlement")
       .select(
@@ -33,17 +39,16 @@ export async function GET(request: NextRequest) {
         paid_at
       `
       )
-      .eq("driver_id", driverId)
+      .eq("driver_id", resolvedDriverId)
       .order("settlement_date", { ascending: false })
       .limit(30)
 
     if (error) throw error
 
-    // Get payment history
     const { data: payments, error: paymentError } = await supabase
       .from("driver_payments")
       .select("*")
-      .eq("driver_id", driverId)
+      .eq("driver_id", resolvedDriverId)
       .order("payment_date", { ascending: false })
       .limit(20)
 
@@ -52,7 +57,7 @@ export async function GET(request: NextRequest) {
     for (const payment of payments || []) {
       if (payment.status !== "pending" || !payment.payment_reference) continue
       try {
-        await verifyDriverPaymentReference(payment.payment_reference, driverId)
+        await verifyDriverPaymentReference(payment.payment_reference, resolvedDriverId)
       } catch (verifyError) {
         console.warn("[PaymentStatus] Pending payment reverification failed:", payment.payment_reference, verifyError)
       }
@@ -61,35 +66,23 @@ export async function GET(request: NextRequest) {
     const { data: refreshedPayments, error: refreshedPaymentError } = await supabase
       .from("driver_payments")
       .select("*")
-      .eq("driver_id", driverId)
+      .eq("driver_id", resolvedDriverId)
       .order("payment_date", { ascending: false })
       .limit(20)
 
     if (refreshedPaymentError) throw refreshedPaymentError
 
-    // Calculate total owed
-    const { data: totalOwed } = await supabase
-      .from("driver_daily_settlement")
-      .select("total_platform_fees")
-      .eq("driver_id", driverId)
-      .in("settlement_status", ["pending", "overdue"])
-
-    const totalPending = totalOwed?.reduce(
-      (sum, s) => sum + (s.total_platform_fees || 0),
-      0
-    ) || 0
+    const remittanceSummary = await getDriverRemittanceSummary(resolvedDriverId)
 
     return NextResponse.json({
       settlements,
       payments: refreshedPayments || payments,
-      totalPending,
+      totalPending: remittanceSummary.grandTotal,
+      remittanceSummary,
       success: true,
     })
   } catch (error) {
     console.error("Error fetching payment status:", error)
-    return NextResponse.json(
-      { error: "Failed to fetch payment status" },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: "Failed to fetch payment status" }, { status: 500 })
   }
 }
