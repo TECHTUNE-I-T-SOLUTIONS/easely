@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase"
+import { verifyDriverPaymentReference } from "@/lib/driver-settlement"
 
 export async function POST(request: NextRequest) {
   try {
@@ -50,18 +51,9 @@ export async function POST(request: NextRequest) {
       try {
         console.log(`[VerifyAll] Verifying payment ${payment.id} with reference ${payment.payment_reference}`)
 
-        // Verify with Paystack
-        const verifyUrl = `https://api.paystack.co/transaction/verify/${payment.payment_reference}`
-        const verifyResponse = await fetch(verifyUrl, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-          },
-        })
+        const verification = await verifyDriverPaymentReference(payment.payment_reference, driver.id)
 
-        const verifyData = await verifyResponse.json()
-
-        if (!verifyData.status) {
+        if (!verification.found) {
           console.log(`[VerifyAll] Payment ${payment.id} not found in Paystack`)
           results.push({
             paymentId: payment.id,
@@ -71,75 +63,14 @@ export async function POST(request: NextRequest) {
           continue
         }
 
-        const transaction = verifyData.data
-        const paystackStatus = transaction.status
+        const paystackStatus = verification.paymentStatus
 
         console.log(`[VerifyAll] Paystack status for ${payment.payment_reference}: ${paystackStatus}`)
 
         verifiedCount++
 
-        // Normalize status
-        const normalizedStatus =
-          paystackStatus === "success"
-            ? "completed"
-            : paystackStatus === "failed" || paystackStatus === "abandoned" || paystackStatus === "cancelled"
-              ? "failed"
-              : "pending"
-
-        // Update payment status
-        const updatePayload: any = { status: normalizedStatus, updated_at: new Date().toISOString() }
-        if (normalizedStatus === "completed") {
-          updatePayload.confirmed_at = new Date().toISOString()
-        }
-
-        const { error: updateError } = await supabaseAdmin!
-          .from("driver_payments")
-          .update(updatePayload)
-          .eq("id", payment.id)
-
-        if (updateError) {
-          console.error(`[VerifyAll] Failed to update payment ${payment.id}:`, updateError)
-          results.push({
-            paymentId: payment.id,
-            reference: payment.payment_reference,
-            status: "update_failed",
-            error: updateError.message,
-          })
-          continue
-        }
-
+        const normalizedStatus = verification.normalizedStatus
         updatedCount++
-
-        // Update transaction status
-        await supabaseAdmin!
-          .from("transactions")
-          .update({ 
-            status: normalizedStatus === "completed" ? "completed" : normalizedStatus === "failed" ? "failed" : "pending",
-            updated_at: new Date().toISOString() 
-          })
-          .eq("reference", payment.payment_reference)
-
-        // If payment successful, update settlement status
-        if (normalizedStatus === "completed") {
-          const settlementIds = (payment.metadata as any)?.settlement_ids || []
-          if (payment.settlement_id) {
-            settlementIds.push(payment.settlement_id)
-          }
-
-          if (settlementIds.length > 0) {
-            console.log(`[VerifyAll] Updating settlements: ${settlementIds.join(", ")}`)
-            
-            await supabaseAdmin!
-              .from("driver_daily_settlement")
-              .update({
-                settlement_status: "paid",
-                paid_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              })
-              .in("id", settlementIds)
-              .eq("driver_id", driver.id)
-          }
-        }
 
         results.push({
           paymentId: payment.id,

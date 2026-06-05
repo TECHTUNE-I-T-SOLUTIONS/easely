@@ -1,73 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase"
-
-async function markPaidSettlementRides(driverId: string, settlementIds: string[] = [], rideIds: string[] = [], paymentId?: string | null) {
-  const uniqueRideIds = Array.from(new Set((rideIds || []).filter(Boolean)))
-
-  if (uniqueRideIds.length > 0) {
-    await supabaseAdmin!
-      .from("rides")
-      .update({
-        remitted: true,
-        remitted_at: new Date().toISOString(),
-        remitted_by_payment_id: paymentId || null,
-      })
-      .in("id", uniqueRideIds)
-      .eq("driver_id", driverId)
-  }
-
-  for (const settlementId of settlementIds || []) {
-    const { data: settlement } = await supabaseAdmin!
-      .from("driver_daily_settlement")
-      .select("id, settlement_date")
-      .eq("id", settlementId)
-      .eq("driver_id", driverId)
-      .maybeSingle()
-
-    if (!settlement?.settlement_date) continue
-
-    const start = new Date(`${settlement.settlement_date}T00:00:00.000Z`)
-    const end = new Date(start)
-    end.setUTCDate(start.getUTCDate() + 1)
-
-    if (uniqueRideIds.length === 0) {
-      await supabaseAdmin!
-        .from("rides")
-        .update({
-          remitted: true,
-          remitted_at: new Date().toISOString(),
-          remitted_by_payment_id: paymentId || null,
-        })
-        .eq("driver_id", driverId)
-        .eq("remitted", false)
-        .in("status", ["accepted", "in_progress", "completed"])
-        .gte("updated_at", start.toISOString())
-        .lt("updated_at", end.toISOString())
-    }
-
-    const { data: remaining } = await supabaseAdmin!
-      .from("rides")
-      .select("id")
-      .eq("driver_id", driverId)
-      .eq("remitted", false)
-      .in("status", ["accepted", "in_progress", "completed"])
-      .gte("updated_at", start.toISOString())
-      .lt("updated_at", end.toISOString())
-      .limit(1)
-
-    if (!remaining?.length) {
-      await supabaseAdmin!
-        .from("driver_daily_settlement")
-        .update({
-          settlement_status: "paid",
-          paid_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", settlementId)
-    }
-  }
-}
+import { verifyDriverPaymentReference } from "@/lib/driver-settlement"
 
 export async function POST(request: NextRequest) {
   try {
@@ -93,68 +27,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Driver not found" }, { status: 404 })
     }
 
-    const verifyUrl = `https://api.paystack.co/transaction/verify/${reference}`
+    const verification = await verifyDriverPaymentReference(reference, driver.id)
 
-    const verifyResponse = await fetch(verifyUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      },
-    })
-
-    const verifyData = await verifyResponse.json()
-
-    if (!verifyData.status) {
+    if (!verification.found) {
       return NextResponse.json({ error: "Payment not found", paymentStatus: "pending" }, { status: 404 })
     }
 
-    const transaction = verifyData.data
-    const { settlementIds, rideIds } = transaction.metadata || {}
+    const transaction = verification.transaction
+    const paymentStatus = verification.paymentStatus
+    const normalizedPaymentStatus = verification.normalizedStatus
 
-    // Normalize Paystack status to our DB status values
-    const paymentStatus = transaction.status
-    const normalizedPaymentStatus =
-      paymentStatus === "success"
-        ? "completed"
-        : paymentStatus === "failed" || paymentStatus === "abandoned" || paymentStatus === "cancelled"
-          ? "failed"
-          : "pending"
-    const updatePayload: any = { status: normalizedPaymentStatus }
     if (normalizedPaymentStatus === "completed") {
-      updatePayload.confirmed_at = new Date().toISOString()
-    }
-
-    await supabaseAdmin!
-      .from("driver_payments")
-      .update(updatePayload)
-      .eq("payment_reference", reference)
-      .eq("driver_id", driver.id)
-
-    const { data: localPayment } = await supabaseAdmin!
-      .from("driver_payments")
-      .select("id")
-      .eq("payment_reference", reference)
-      .eq("driver_id", driver.id)
-      .maybeSingle()
-
-    // Update transaction status in transactions table
-    const { data: transactions } = await supabaseAdmin!
-      .from("transactions")
-      .select("id")
-      .eq("reference", reference)
-
-    if (transactions?.length) {
-      const transactionStatus = normalizedPaymentStatus === "completed" ? "completed" : normalizedPaymentStatus === "failed" ? "failed" : "pending"
-      await supabaseAdmin!
-        .from("transactions")
-        .update({ status: transactionStatus, updated_at: new Date().toISOString() })
-        .eq("reference", reference)
-    }
-
-    // If payment successful, mark paid ride remittance and close settlement only when fully remitted.
-    if (normalizedPaymentStatus === "completed" && (Array.isArray(settlementIds) || Array.isArray(rideIds))) {
-      await markPaidSettlementRides(driver.id, settlementIds || [], rideIds || [], localPayment?.id || null)
-
       // Check if driver has remaining unpaid settlements
       const { data: unpaidSettlements } = await supabaseAdmin!
         .from("driver_daily_settlement")
@@ -262,60 +145,20 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // Verify with Paystack
-    const verifyUrl = `https://api.paystack.co/transaction/verify/${reference}`
-    const verifyResponse = await fetch(verifyUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      },
-    })
+    const verification = await verifyDriverPaymentReference(reference, driver.id)
 
-    const verifyData = await verifyResponse.json()
-
-    if (!verifyData.status) {
+    if (!verification.found) {
       return NextResponse.json(
         { success: false, paymentStatus: "pending", verified: false },
         { status: 404 }
       )
     }
 
-    const transaction = verifyData.data
-    const paymentStatus = transaction.status
-    const normalizedPaymentStatus =
-      paymentStatus === "success"
-        ? "completed"
-        : paymentStatus === "failed" || paymentStatus === "abandoned" || paymentStatus === "cancelled"
-          ? "failed"
-          : "pending"
+    const transaction = verification.transaction
+    const paymentStatus = verification.paymentStatus
+    const normalizedPaymentStatus = verification.normalizedStatus
 
-    // Update local payment record with current Paystack status
     if (payment) {
-      await supabaseAdmin!
-        .from("driver_payments")
-        .update({
-          status: normalizedPaymentStatus,
-          ...(normalizedPaymentStatus === "completed" ? { confirmed_at: new Date().toISOString() } : {}),
-        })
-        .eq("id", payment.id)
-
-      // Update transaction status
-      const transactionStatus = normalizedPaymentStatus === "completed" ? "completed" : normalizedPaymentStatus === "failed" ? "failed" : "pending"
-      await supabaseAdmin!
-        .from("transactions")
-        .update({ status: transactionStatus, updated_at: new Date().toISOString() })
-        .eq("reference", reference)
-
-      const metadata = (payment.metadata as any) || transaction.metadata || {}
-      if (normalizedPaymentStatus === "completed") {
-        await markPaidSettlementRides(
-          driver.id,
-          metadata.settlement_ids || metadata.settlementIds || [],
-          metadata.ride_ids || metadata.rideIds || [],
-          payment.id
-        )
-      }
-
       // Add notification if status changed to success
       if (normalizedPaymentStatus === "completed" && payment.status !== "completed") {
         await supabaseAdmin!

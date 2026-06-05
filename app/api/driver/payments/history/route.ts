@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase"
+import { verifyDriverPaymentReference } from "@/lib/driver-settlement"
 
 export async function GET(request: NextRequest) {
   try {
@@ -32,37 +33,62 @@ export async function GET(request: NextRequest) {
       }, total: 0, limit, offset })
     }
 
-    // Load remittance transactions from transactions table (source=payout)
-    const { data: allRemittanceTx, error: txError } = await supabaseAdmin!
-      .from("transactions")
-      .select("id, amount, reference, status, source, description, created_at, updated_at")
-      .eq("wallet_id", wallet.id)
-      .eq("source", "payout")
-      .order("created_at", { ascending: false })
+    const { data: driver } = await supabaseAdmin!
+      .from("drivers")
+      .select("id")
+      .eq("user_id", session.user.id)
+      .single()
 
-    if (txError) {
-      throw txError
+    if (!driver?.id) {
+      return NextResponse.json({ error: "Driver not found" }, { status: 404 })
     }
 
-    const txList = allRemittanceTx || []
-    const normalized = txList.map((tx) => {
+    const { data: pendingPayments } = await supabaseAdmin!
+      .from("driver_payments")
+      .select("payment_reference")
+      .eq("driver_id", driver.id)
+      .eq("status", "pending")
+      .order("payment_date", { ascending: false })
+      .limit(10)
+
+    for (const payment of pendingPayments || []) {
+      if (!payment.payment_reference) continue
+      try {
+        await verifyDriverPaymentReference(payment.payment_reference, driver.id)
+      } catch (verifyError) {
+        console.warn("[PaymentHistory] Pending payment reverification failed:", payment.payment_reference, verifyError)
+      }
+    }
+
+    const { data: allPayments, error: paymentsError } = await supabaseAdmin!
+      .from("driver_payments")
+      .select("id, amount, payment_method, payment_reference, status, payment_date, confirmed_at, created_at, metadata")
+      .eq("driver_id", driver.id)
+      .order("payment_date", { ascending: false })
+
+    if (paymentsError) {
+      throw paymentsError
+    }
+
+    const paymentList = allPayments || []
+    const normalized = paymentList.map((payment) => {
       const normalizedStatus =
-        tx.status === "completed"
+        payment.status === "completed"
           ? "completed"
-          : tx.status === "failed"
+          : payment.status === "failed"
             ? "failed"
             : "pending"
 
       return {
-        id: tx.id,
-        amount: Number(tx.amount || 0),
-        payment_method: "paystack",
-        payment_reference: tx.reference || tx.id,
+        id: payment.id,
+        amount: Number(payment.amount || 0),
+        payment_method: payment.payment_method || "paystack",
+        payment_reference: payment.payment_reference || payment.id,
         status: normalizedStatus,
-        payment_date: tx.created_at,
-        confirmed_at: normalizedStatus === "completed" ? tx.updated_at : null,
-        created_at: tx.created_at,
-        description: tx.description || "Settlement payment",
+        payment_date: payment.payment_date || payment.created_at,
+        confirmed_at: payment.confirmed_at || null,
+        created_at: payment.created_at || payment.payment_date,
+        description: "Settlement payment",
       }
     })
 

@@ -1,78 +1,12 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
 import { sendPushNotification } from "@/lib/push-service"
+import { verifyDriverPaymentReference } from "@/lib/driver-settlement"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-
-async function markPaidSettlementRides(driverId: string, settlementIds: string[] = [], rideIds: string[] = [], paymentId?: string | null) {
-  const uniqueRideIds = Array.from(new Set((rideIds || []).filter(Boolean)))
-
-  if (uniqueRideIds.length > 0) {
-    await supabase
-      .from("rides")
-      .update({
-        remitted: true,
-        remitted_at: new Date().toISOString(),
-        remitted_by_payment_id: paymentId || null,
-      })
-      .in("id", uniqueRideIds)
-      .eq("driver_id", driverId)
-  }
-
-  for (const settlementId of settlementIds || []) {
-    const { data: settlement } = await supabase
-      .from("driver_daily_settlement")
-      .select("id, settlement_date")
-      .eq("id", settlementId)
-      .eq("driver_id", driverId)
-      .maybeSingle()
-
-    if (!settlement?.settlement_date) continue
-
-    const start = new Date(`${settlement.settlement_date}T00:00:00.000Z`)
-    const end = new Date(start)
-    end.setUTCDate(start.getUTCDate() + 1)
-
-    if (uniqueRideIds.length === 0) {
-      await supabase
-        .from("rides")
-        .update({
-          remitted: true,
-          remitted_at: new Date().toISOString(),
-          remitted_by_payment_id: paymentId || null,
-        })
-        .eq("driver_id", driverId)
-        .eq("remitted", false)
-        .in("status", ["accepted", "in_progress", "completed"])
-        .gte("updated_at", start.toISOString())
-        .lt("updated_at", end.toISOString())
-    }
-
-    const { data: remaining } = await supabase
-      .from("rides")
-      .select("id")
-      .eq("driver_id", driverId)
-      .eq("remitted", false)
-      .in("status", ["accepted", "in_progress", "completed"])
-      .gte("updated_at", start.toISOString())
-      .lt("updated_at", end.toISOString())
-      .limit(1)
-
-    if (!remaining?.length) {
-      await supabase
-        .from("driver_daily_settlement")
-        .update({
-          settlement_status: "paid",
-          paid_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", settlementId)
-    }
-  }
-}
 
 export async function GET(request: NextRequest) {
   try {
@@ -261,33 +195,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Verify payment with Paystack
-    const verifyUrl = `https://api.paystack.co/transaction/verify/${reference}`
+    const verification = await verifyDriverPaymentReference(reference)
 
-    const verifyResponse = await fetch(verifyUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      },
-    })
-
-    const verifyData = await verifyResponse.json()
-
-    if (!verifyData.status || verifyData.data.status !== "success") {
-      // Mark payment as failed
-      await supabase
-        .from("driver_payments")
-        .update({ status: "failed" })
-        .eq("payment_reference", reference)
-
+    if (!verification.found || !verification.success) {
       return NextResponse.json(
         { error: "Payment verification failed" },
         { status: 400 }
       )
     }
 
-    const paymentData = verifyData.data
-    const { driverId, settlementIds, rideIds } = paymentData.metadata
+    const paymentData = verification.transaction
+    const { driverId } = paymentData.metadata || {}
 
     const { data: existingPayment } = await supabase
       .from("driver_payments")
@@ -297,21 +215,7 @@ export async function POST(request: NextRequest) {
 
     const wasAlreadyCompleted = existingPayment?.status === "completed"
 
-    // Update payment status to completed
-    const { data: payment } = await supabase
-      .from("driver_payments")
-      .update({
-        status: "completed",
-        confirmed_at: new Date().toISOString(),
-      })
-      .eq("payment_reference", reference)
-      .select()
-      .single()
-
-    // Update all related settlements to paid
-    if (driverId && (settlementIds?.length || rideIds?.length)) {
-      await markPaidSettlementRides(driverId, settlementIds || [], rideIds || [], payment?.id || existingPayment?.id || null)
-    }
+    const payment = verification.payment || existingPayment
 
     // Get driver user ID for push notification
     let driverUserId: string | null = null
@@ -336,7 +240,7 @@ export async function POST(request: NextRequest) {
           data: {
             reference,
             amount,
-            settlementIds: settlementIds || [],
+            settlementIds: paymentData.metadata?.settlementIds || paymentData.metadata?.settlement_ids || [],
             paymentDate: new Date().toISOString(),
           },
         })

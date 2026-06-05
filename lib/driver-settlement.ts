@@ -32,6 +32,191 @@ export function getDateRangeForOffset(offsetDays: number) {
   return getLagosDayRange(todayInLagos.toISOString().slice(0, 10))
 }
 
+export function normalizePaystackStatus(status?: string | null) {
+  if (status === "success") return "completed"
+  if (status === "failed" || status === "abandoned" || status === "cancelled") return "failed"
+  return "pending"
+}
+
+export async function markPaidSettlementRides(
+  driverId: string,
+  settlementIds: string[] = [],
+  rideIds: string[] = [],
+  paymentId?: string | null
+) {
+  if (!supabaseAdmin) {
+    throw new Error("Supabase admin client not initialized")
+  }
+
+  const uniqueSettlementIds = Array.from(new Set((settlementIds || []).filter(Boolean)))
+  const uniqueRideIds = Array.from(new Set((rideIds || []).filter(Boolean)))
+  const now = new Date().toISOString()
+
+  if (!uniqueSettlementIds.length && uniqueRideIds.length > 0) {
+    await supabaseAdmin
+      .from("rides")
+      .update({
+        remitted: true,
+        remitted_at: now,
+        remitted_by_payment_id: paymentId || null,
+      })
+      .in("id", uniqueRideIds)
+      .eq("driver_id", driverId)
+    return
+  }
+
+  for (const settlementId of uniqueSettlementIds) {
+    const { data: settlement } = await supabaseAdmin
+      .from("driver_daily_settlement")
+      .select("id, settlement_date")
+      .eq("id", settlementId)
+      .eq("driver_id", driverId)
+      .maybeSingle()
+
+    if (!settlement?.settlement_date) continue
+
+    const { start, end } = getLagosDayRange(settlement.settlement_date)
+    let rideIdsForThisSettlement: string[] = []
+
+    if (uniqueRideIds.length > 0) {
+      const { data: matchingRides, error: matchingError } = await supabaseAdmin
+        .from("rides")
+        .select("id")
+        .in("id", uniqueRideIds)
+        .eq("driver_id", driverId)
+        .in("status", ["accepted", "in_progress", "completed"])
+        .gte("updated_at", start.toISOString())
+        .lt("updated_at", end.toISOString())
+
+      if (matchingError) throw matchingError
+      rideIdsForThisSettlement = (matchingRides || []).map((ride) => ride.id)
+    }
+
+    if (rideIdsForThisSettlement.length > 0) {
+      await supabaseAdmin
+        .from("rides")
+        .update({
+          remitted: true,
+          remitted_at: now,
+          remitted_by_payment_id: paymentId || null,
+        })
+        .in("id", rideIdsForThisSettlement)
+        .eq("driver_id", driverId)
+    } else {
+      await supabaseAdmin
+        .from("rides")
+        .update({
+          remitted: true,
+          remitted_at: now,
+          remitted_by_payment_id: paymentId || null,
+        })
+        .eq("driver_id", driverId)
+        .eq("remitted", false)
+        .in("status", ["accepted", "in_progress", "completed"])
+        .gte("updated_at", start.toISOString())
+        .lt("updated_at", end.toISOString())
+    }
+
+    const { data: remaining, error: remainingError } = await supabaseAdmin
+      .from("rides")
+      .select("id")
+      .eq("driver_id", driverId)
+      .eq("remitted", false)
+      .in("status", ["accepted", "in_progress", "completed"])
+      .gte("updated_at", start.toISOString())
+      .lt("updated_at", end.toISOString())
+      .limit(1)
+
+    if (remainingError) throw remainingError
+
+    if (!remaining?.length) {
+      await supabaseAdmin
+        .from("driver_daily_settlement")
+        .update({
+          settlement_status: "paid",
+          paid_at: now,
+          updated_at: now,
+        })
+        .eq("id", settlementId)
+        .eq("driver_id", driverId)
+    }
+  }
+}
+
+export async function verifyDriverPaymentReference(reference: string, driverId?: string | null) {
+  if (!supabaseAdmin) {
+    throw new Error("Supabase admin client not initialized")
+  }
+
+  const verifyResponse = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+    },
+  })
+  const verifyData = await verifyResponse.json()
+
+  if (!verifyData.status) {
+    return {
+      found: false,
+      success: false,
+      paymentStatus: "not_found",
+      normalizedStatus: "pending",
+      transaction: null,
+      payment: null,
+    }
+  }
+
+  const transaction = verifyData.data
+  const normalizedStatus = normalizePaystackStatus(transaction.status)
+  const updatePayload: any = {
+    status: normalizedStatus,
+    updated_at: new Date().toISOString(),
+  }
+  if (normalizedStatus === "completed") {
+    updatePayload.confirmed_at = new Date().toISOString()
+  }
+
+  let paymentQuery = supabaseAdmin
+    .from("driver_payments")
+    .update(updatePayload)
+    .eq("payment_reference", reference)
+    .select()
+
+  if (driverId) paymentQuery = paymentQuery.eq("driver_id", driverId)
+  const { data: payments, error: paymentUpdateError } = await paymentQuery
+
+  if (paymentUpdateError) throw paymentUpdateError
+
+  const transactionStatus = normalizedStatus === "completed" ? "completed" : normalizedStatus === "failed" ? "failed" : "pending"
+  await supabaseAdmin
+    .from("transactions")
+    .update({ status: transactionStatus, updated_at: new Date().toISOString() })
+    .eq("reference", reference)
+
+  const payment = payments?.[0] || null
+  const metadata = (payment?.metadata as any) || transaction.metadata || {}
+  const resolvedDriverId = driverId || transaction.metadata?.driverId || payment?.driver_id || null
+
+  if (normalizedStatus === "completed" && resolvedDriverId) {
+    await markPaidSettlementRides(
+      resolvedDriverId,
+      metadata.settlement_ids || metadata.settlementIds || transaction.metadata?.settlementIds || [],
+      metadata.ride_ids || metadata.rideIds || transaction.metadata?.rideIds || [],
+      payment?.id || null
+    )
+  }
+
+  return {
+    found: true,
+    success: normalizedStatus === "completed",
+    paymentStatus: transaction.status,
+    normalizedStatus,
+    transaction,
+    payment,
+  }
+}
+
 export async function upsertSettlementForDate(driverId: string, dateString: string) {
   if (!supabaseAdmin) {
     throw new Error("Supabase admin client not initialized")
@@ -208,7 +393,49 @@ export async function getOutstandingSettlements(driverId: string) {
     throw error
   }
 
-  return settlements || []
+  const resolvedSettlements = []
+  for (const settlement of settlements || []) {
+    const { start, end } = getLagosDayRange(settlement.settlement_date)
+    const { data: unpaidRides, error: unpaidRidesError } = await supabaseAdmin
+      .from("rides")
+      .select("id, platform_fee")
+      .eq("driver_id", driverId)
+      .eq("remitted", false)
+      .in("status", ["accepted", "in_progress", "completed"])
+      .gte("updated_at", start.toISOString())
+      .lt("updated_at", end.toISOString())
+
+    if (unpaidRidesError) {
+      throw unpaidRidesError
+    }
+
+    const outstandingPlatformFees = (unpaidRides || []).reduce(
+      (sum, ride) => sum + Number(ride.platform_fee || 0),
+      0
+    )
+
+    if (outstandingPlatformFees <= 0) {
+      await supabaseAdmin
+        .from("driver_daily_settlement")
+        .update({
+          settlement_status: "paid",
+          paid_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", settlement.id)
+        .eq("driver_id", driverId)
+      continue
+    }
+
+    resolvedSettlements.push({
+      ...settlement,
+      total_platform_fees: outstandingPlatformFees,
+      outstanding_platform_fees: outstandingPlatformFees,
+      unpaid_ride_count: unpaidRides?.length || 0,
+    })
+  }
+
+  return resolvedSettlements
 }
 
 export async function getDriverRemittanceSummary(driverId: string) {

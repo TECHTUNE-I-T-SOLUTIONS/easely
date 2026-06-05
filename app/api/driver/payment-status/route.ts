@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
+import { verifyDriverPaymentReference } from "@/lib/driver-settlement"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -48,12 +49,30 @@ export async function GET(request: NextRequest) {
 
     if (paymentError) throw paymentError
 
+    for (const payment of payments || []) {
+      if (payment.status !== "pending" || !payment.payment_reference) continue
+      try {
+        await verifyDriverPaymentReference(payment.payment_reference, driverId)
+      } catch (verifyError) {
+        console.warn("[PaymentStatus] Pending payment reverification failed:", payment.payment_reference, verifyError)
+      }
+    }
+
+    const { data: refreshedPayments, error: refreshedPaymentError } = await supabase
+      .from("driver_payments")
+      .select("*")
+      .eq("driver_id", driverId)
+      .order("payment_date", { ascending: false })
+      .limit(20)
+
+    if (refreshedPaymentError) throw refreshedPaymentError
+
     // Calculate total owed
     const { data: totalOwed } = await supabase
       .from("driver_daily_settlement")
       .select("total_platform_fees")
       .eq("driver_id", driverId)
-      .eq("settlement_status", "pending")
+      .in("settlement_status", ["pending", "overdue"])
 
     const totalPending = totalOwed?.reduce(
       (sum, s) => sum + (s.total_platform_fees || 0),
@@ -62,7 +81,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       settlements,
-      payments,
+      payments: refreshedPayments || payments,
       totalPending,
       success: true,
     })
