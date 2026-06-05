@@ -9,13 +9,73 @@ function getHeader(request: NextRequest, key: string) {
 }
 
 function verifyWebhookSignature(rawBody: string, signature: string, secret: string) {
-  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex")
+  const expected = crypto.createHmac("sha512", secret).update(rawBody).digest("hex")
 
   if (expected.length !== signature.length) {
     return false
   }
 
   return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
+}
+
+function safeCompare(a: string, b: string) {
+  const left = Buffer.from(a)
+  const right = Buffer.from(b)
+  if (left.length !== right.length) return false
+  return crypto.timingSafeEqual(left, right)
+}
+
+function getWebhookAuth(request: NextRequest, rawBody: string, body: any) {
+  const webhookSecret = process.env.TERMII_WEBHOOK_SECRET
+  const requireSignature = process.env.TERMII_REQUIRE_WEBHOOK_SIGNATURE === "true"
+  if (!webhookSecret) return { authenticated: !requireSignature, requireSignature }
+
+  const signature =
+    getHeader(request, "x-termii-signature") ||
+    getHeader(request, "x-termii-signature-hash") ||
+    getHeader(request, "termii-signature")
+
+  const sharedSecret =
+    getHeader(request, "x-webhook-secret") ||
+    getHeader(request, "x-termii-webhook-secret") ||
+    request.nextUrl.searchParams.get("secret") ||
+    (typeof body?.secret === "string" ? body.secret : "")
+
+  const validSignature = signature ? verifyWebhookSignature(rawBody, signature, webhookSecret) : false
+  const validSharedSecret = sharedSecret ? safeCompare(sharedSecret, webhookSecret) : false
+
+  return {
+    authenticated: validSignature || validSharedSecret || !requireSignature,
+    requireSignature,
+    hasSignature: Boolean(signature),
+    hasSharedSecret: Boolean(sharedSecret),
+    invalidSignature: Boolean(signature && !validSignature),
+  }
+}
+
+function getTermiiEventType(body: any) {
+  const explicit = String(body?.type || body?.event || body?.event_type || "").toLowerCase()
+  if (explicit) return explicit
+
+  const hasDeliveryStatus = Boolean(body?.message_id || body?.messageId || body?.status || body?.delivery_status)
+  const hasIncomingMessage = Boolean(
+    (body?.from || body?.msisdn || body?.phone_number || body?.sender) &&
+      (body?.message || body?.sms || body?.text || body?.content)
+  )
+
+  if (hasIncomingMessage) return "inbound"
+  if (hasDeliveryStatus) return "delivery_report"
+  return ""
+}
+
+function extractDeliveryReport(body: any) {
+  return {
+    messageId: body?.message_id || body?.messageId || body?.id || null,
+    status: body?.status || body?.delivery_status || body?.message_status || null,
+    phone: body?.to || body?.receiver || body?.phone_number || body?.msisdn || null,
+    network: body?.network || body?.operator || null,
+    raw: body,
+  }
 }
 
 function extractIncomingMessage(body: any) {
@@ -76,34 +136,31 @@ export async function POST(request: NextRequest) {
     const rawBody = await request.text()
     const body = rawBody ? JSON.parse(rawBody) : {}
 
-    const webhookSecret = process.env.TERMII_WEBHOOK_SECRET
-    const requireSignature = process.env.TERMII_REQUIRE_WEBHOOK_SIGNATURE === "true"
-
-    if (webhookSecret) {
-      const signature =
-        getHeader(request, "x-termii-signature") ||
-        getHeader(request, "x-termii-signature-hash") ||
-        getHeader(request, "termii-signature")
-
-      if (signature && !verifyWebhookSignature(rawBody, signature, webhookSecret)) {
-        return NextResponse.json({ error: "Invalid signature" }, { status: 401 })
-      }
-
-      if (!signature && requireSignature) {
-        return NextResponse.json({ error: "Missing signature" }, { status: 401 })
-      }
-    }
-
     // Handle Termii webhook events
     console.log("[Termii] Webhook received:", body)
 
-    const eventType = String(body?.type || body?.event || "").toLowerCase()
+    const eventType = getTermiiEventType(body)
+    const auth = getWebhookAuth(request, rawBody, body)
+
+    if (!auth.authenticated && eventType !== "delivery_report") {
+      console.warn("[Termii-Webhook] Rejected unauthenticated actionable webhook", {
+        eventType,
+        hasSignature: auth.hasSignature,
+        hasSharedSecret: auth.hasSharedSecret,
+        invalidSignature: auth.invalidSignature,
+      })
+      return NextResponse.json({ error: "Webhook verification failed" }, { status: 401 })
+    }
+
+    if (!auth.authenticated && eventType === "delivery_report") {
+      console.warn("[Termii-Webhook] Delivery report received without valid webhook signature/secret; acknowledged only")
+    }
 
     // Handle different event types
     switch (eventType) {
       case "delivery_report":
         // Message delivery status
-        console.log("[Termii-Webhook] Delivery report:", body.message_id, body.status)
+        console.log("[Termii-Webhook] Delivery report:", extractDeliveryReport(body))
         break
 
       case "inbound":
