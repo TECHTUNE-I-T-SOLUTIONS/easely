@@ -1,7 +1,25 @@
 import { NextRequest, NextResponse } from "next/server"
 import bcrypt from "bcryptjs"
+import { createHash } from "crypto"
 import { getSessionFromRequest } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase"
+
+function hashIdentifier(value?: string | null) {
+  const normalized = String(value || "").trim().toLowerCase()
+  return normalized ? createHash("sha256").update(normalized).digest("hex") : null
+}
+
+function maskEmail(email?: string | null) {
+  const [name, domain] = String(email || "").split("@")
+  if (!name || !domain) return null
+  return `${name.slice(0, 2)}***@${domain}`
+}
+
+function maskPhone(phone?: string | null) {
+  const value = String(phone || "").trim()
+  if (value.length < 5) return null
+  return `${value.slice(0, 4)}***${value.slice(-3)}`
+}
 
 export async function DELETE(request: NextRequest) {
   try {
@@ -20,6 +38,35 @@ export async function DELETE(request: NextRequest) {
     const anonymizedEmail = `deleted-${userId}@deleted.charterkeke.local`
     const anonymizedPhone = `deleted-${userId.slice(0, 18)}`
     const passwordHash = await bcrypt.hash(`deleted:${userId}:${deletedStamp}:${crypto.randomUUID()}`, 10)
+
+    const { data: existingUser } = await supabaseAdmin
+      .from("users")
+      .select("id, first_name, last_name, email, phone_number, role, status, created_at")
+      .eq("id", userId)
+      .single()
+
+    if (existingUser) {
+      await supabaseAdmin.from("deleted_accounts").insert({
+        original_user_id: existingUser.id,
+        role: existingUser.role,
+        previous_status: existingUser.status,
+        masked_email: maskEmail(existingUser.email),
+        masked_phone: maskPhone(existingUser.phone_number),
+        email_hash: hashIdentifier(existingUser.email),
+        phone_hash: hashIdentifier(existingUser.phone_number),
+        account_created_at: existingUser.created_at,
+        deleted_at: deletedStamp,
+        deletion_reason: "user_requested",
+        metadata: {
+          name: `${existingUser.first_name || ""} ${existingUser.last_name || ""}`.trim() || null,
+          source: "mobile_app",
+        },
+      }).then(({ error }) => {
+        if (error && error.code !== "42P01") {
+          console.warn("[AccountDeletion] Failed to write deleted account ledger:", error)
+        }
+      })
+    }
 
     await Promise.allSettled([
       supabaseAdmin.from("push_subscriptions").delete().eq("user_id", userId),
