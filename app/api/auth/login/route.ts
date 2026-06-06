@@ -2,27 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { sendPushNotification } from "@/lib/push-service";
-
-function getPhoneVariants(input?: string | null) {
-  if (!input) return [];
-  const compact = String(input).trim().replace(/[^\d+]/g, "");
-  const digits = compact.replace(/\D/g, "");
-  const variants = new Set<string>([String(input).trim(), compact, digits]);
-
-  if (digits.startsWith("234") && digits.length >= 13) {
-    variants.add(`+${digits}`);
-    variants.add(`0${digits.slice(3)}`);
-  } else if (digits.startsWith("0") && digits.length >= 11) {
-    variants.add(`234${digits.slice(1)}`);
-    variants.add(`+234${digits.slice(1)}`);
-  } else if (digits.length === 10) {
-    variants.add(`0${digits}`);
-    variants.add(`234${digits}`);
-    variants.add(`+234${digits}`);
-  }
-
-  return Array.from(variants).filter(Boolean);
-}
+import { normalizeEmail, phoneVariants } from "@/lib/auth-normalize";
 
 export async function POST(request: NextRequest) {
   try {
@@ -52,7 +32,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { email, phone, password } = body;
+    const { password } = body;
+    const email = body.email ? normalizeEmail(body.email) : "";
+    const phone = body.phone ? String(body.phone).trim() : "";
 
     // Validate required fields
     if (!password) {
@@ -78,7 +60,7 @@ export async function POST(request: NextRequest) {
       const { data, error } = await supabaseAdmin
         .from("users")
         .select("*")
-        .eq("email", email)
+        .ilike("email", email)
         .single();
 
       if (error) {
@@ -92,11 +74,11 @@ export async function POST(request: NextRequest) {
       user = data;
     } else if (phone) {
       console.log("🔍 [LOGIN] Searching user by phone...");
-      const phoneVariants = getPhoneVariants(phone);
+      const phoneOptions = phoneVariants(phone);
       const { data, error } = await supabaseAdmin
         .from("users")
         .select("*")
-        .in("phone_number", phoneVariants)
+        .in("phone_number", phoneOptions)
         .limit(1)
         .single();
 

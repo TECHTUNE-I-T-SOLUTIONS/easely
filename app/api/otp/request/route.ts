@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { sendSMS } from "@/lib/termii";
 import nodemailer from "nodemailer";
+import { normalizeEmail, normalizePhone, phoneVariants } from "@/lib/auth-normalize";
 
 function env(name: string, fallback = "") {
   return process.env[name] || fallback;
@@ -81,7 +82,9 @@ async function sendEmailOTP(to: string, code: string, type: string) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { phone_number, email, type, user_id } = body;
+    const { type, user_id } = body;
+    const phone_number = body.phone_number ? normalizePhone(body.phone_number) : "";
+    const email = body.email ? normalizeEmail(body.email) : "";
     const deliveryMethod = String(body.deliveryMethod || body.method || body.channel || "sms").toLowerCase();
 
     console.log(`📱 [OTP-REQUEST] Type: ${type}, Phone: ${phone_number || 'N/A'}, Email: ${email || 'N/A'}`);
@@ -105,7 +108,7 @@ export async function POST(request: NextRequest) {
       const { data: user, error: userError } = await supabaseAdmin
         .from("users")
         .select("id, phone_number, email")
-        .eq("email", email)
+        .ilike("email", email)
         .single();
 
       if (userError || !user) {
@@ -117,19 +120,20 @@ export async function POST(request: NextRequest) {
       }
 
       findUser = user;
-      targetPhone = user.phone_number;
-      targetEmail = user.email;
+      targetPhone = normalizePhone(user.phone_number);
+      targetEmail = normalizeEmail(user.email);
       console.log(`✅ [OTP-REQUEST] User found, phone: ${targetPhone}`);
     }
 
     // If phone_number provided, look up user
     if (phone_number && !email) {
       console.log(`🔍 [OTP-REQUEST] Looking up user by phone: ${phone_number}`);
-      const { data: user, error: userError } = await supabaseAdmin
+      const { data: users, error: userError } = await supabaseAdmin
         .from("users")
         .select("id, phone_number, email")
-        .eq("phone_number", phone_number)
-        .single();
+        .in("phone_number", phoneVariants(phone_number))
+        .limit(1);
+      const user = users?.[0];
 
       if (userError || !user) {
         console.error(`❌ [OTP-REQUEST] User not found with phone: ${phone_number}`);
@@ -140,7 +144,8 @@ export async function POST(request: NextRequest) {
       }
 
       findUser = user;
-      targetEmail = user.email;
+      targetPhone = normalizePhone(user.phone_number);
+      targetEmail = normalizeEmail(user.email);
       console.log(`✅ [OTP-REQUEST] User found, email: ${targetEmail}`);
     }
 
@@ -160,7 +165,7 @@ export async function POST(request: NextRequest) {
       const { data: userByEmail } = await supabaseAdmin
         .from("users")
         .select("id")
-        .eq("email", targetEmail)
+        .ilike("email", targetEmail)
         .single();
       userId = userByEmail?.id;
     }

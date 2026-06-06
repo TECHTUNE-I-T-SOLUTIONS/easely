@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import crypto from "crypto"
 import { supabase } from "@/lib/supabase"
 import { Resend } from "resend"
+import { normalizeEmail, normalizePhone, phoneVariants } from "@/lib/auth-normalize"
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null
 
@@ -12,7 +13,8 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { email, phone_number } = body
+    const email = body.email ? normalizeEmail(body.email) : ""
+    const phone_number = body.phone_number ? normalizePhone(body.phone_number) : ""
 
     if (!email && !phone_number) {
       return NextResponse.json(
@@ -25,9 +27,10 @@ export async function POST(request: NextRequest) {
       .from("users")
       .select("id, email, phone_number, status")
 
-    const { data: user, error: userError } = await (email
-      ? query.eq("email", email).single()
-      : query.eq("phone_number", phone_number).single())
+    const { data: users, error: userError } = await (email
+      ? query.ilike("email", email).limit(1)
+      : query.in("phone_number", phoneVariants(phone_number)).limit(1))
+    const user = users?.[0]
 
     // Always return success for security (don't reveal if email exists or not)
     if (userError || !user) {

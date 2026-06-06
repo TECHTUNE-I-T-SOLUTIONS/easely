@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { uploadFileWithServiceRole } from "@/lib/upload-file";
 import { sendWelcomeEmail } from "@/lib/welcome-email";
+import { normalizeEmail, normalizePhone, phoneVariants } from "@/lib/auth-normalize";
 
 function errorResponse(status: number, error: string, meta?: Record<string, unknown>) {
   return NextResponse.json(
@@ -21,8 +22,8 @@ export async function POST(request: NextRequest) {
     
     const firstName = formData.get("firstName") as string;
     const lastName = formData.get("lastName") as string;
-    const email = formData.get("email") as string;
-    const phone = formData.get("phone") as string;
+    const email = normalizeEmail(formData.get("email") as string);
+    const phone = normalizePhone(formData.get("phone") as string);
     const password = formData.get("password") as string;
     const role = (formData.get("role") as string) || "user";
     const homeAddress = ((formData.get("homeAddress") as string) || "").trim();
@@ -82,11 +83,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if user already exists
-    const { data: existingUser } = await supabase
+    const phoneOptions = phoneVariants(phone)
+    const { data: existingUsers } = await supabase
       .from("users")
-      .select("id")
-      .or(`email.eq.${email},phone_number.eq.${phone}`)
-      .maybeSingle();
+      .select("id, email, phone_number, status")
+      .or(`email.ilike.${email},phone_number.in.(${phoneOptions.map((item) => `"${item.replace(/"/g, '\\"')}"`).join(",")})`)
+      .limit(5);
+
+    const existingUser = (existingUsers || []).find((user: any) => {
+      const existingEmail = normalizeEmail(user.email)
+      const existingPhone = normalizePhone(user.phone_number)
+      return existingEmail === email || existingPhone === phone
+    });
 
     if (existingUser) {
       console.warn("Signup validation failed: user already exists", { email, phone });

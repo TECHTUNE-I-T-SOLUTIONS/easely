@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import crypto from "crypto"
 import bcrypt from "bcryptjs"
 import { supabase, supabaseAdmin } from "@/lib/supabase"
+import { normalizeEmail, normalizePhone, phoneVariants } from "@/lib/auth-normalize"
 
 function errorResponse(status: number, error: string, meta?: Record<string, unknown>) {
   return NextResponse.json(
@@ -23,8 +24,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const token = body.token || body.resetToken || body.passwordResetToken
     const password = body.password || body.newPassword || body.new_password
-    const email = body.email || body.email_address
-    const phoneNumber = body.phone_number || body.phoneNumber || body.phone
+    const email = body.email || body.email_address ? normalizeEmail(body.email || body.email_address) : ""
+    const phoneNumber = body.phone_number || body.phoneNumber || body.phone ? normalizePhone(body.phone_number || body.phoneNumber || body.phone) : ""
 
     console.log("🔑 [RESET-PASSWORD] Incoming request", {
       hasToken: !!token,
@@ -58,9 +59,10 @@ export async function POST(request: NextRequest) {
         .from("users")
         .select("id, email, phone_number")
 
-      const { data: otpUser, error: otpUserError } = await (email
-        ? userQuery.eq("email", email).single()
-        : userQuery.eq("phone_number", phoneNumber).single())
+      const { data: otpUsers, error: otpUserError } = await (email
+        ? userQuery.ilike("email", email).limit(1)
+        : userQuery.in("phone_number", phoneVariants(phoneNumber)).limit(1))
+      const otpUser = otpUsers?.[0]
 
       if (otpUserError || !otpUser) {
         console.warn("❌ [RESET-PASSWORD] OTP fallback user not found", {

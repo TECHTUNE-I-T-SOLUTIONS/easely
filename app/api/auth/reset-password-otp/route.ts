@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
+import { normalizeEmail, normalizePhone, phoneVariants } from "@/lib/auth-normalize";
 
 function errorResponse(status: number, error: string, meta?: Record<string, unknown>) {
   return NextResponse.json(
@@ -29,8 +30,8 @@ function errorResponse(status: number, error: string, meta?: Record<string, unkn
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const email = body.email || body.email_address;
-    const phone_number = body.phone_number || body.phoneNumber || body.phone;
+    const email = body.email || body.email_address ? normalizeEmail(body.email || body.email_address) : "";
+    const phone_number = body.phone_number || body.phoneNumber || body.phone ? normalizePhone(body.phone_number || body.phoneNumber || body.phone) : "";
     const newPassword = body.newPassword || body.password || body.new_password;
 
     console.log(`🔑 [RESET-PASSWORD-OTP] Email: ${email || 'N/A'}, Phone: ${phone_number || 'N/A'}`);
@@ -65,9 +66,10 @@ export async function POST(request: NextRequest) {
       .from("users")
       .select("id, email, phone_number")
 
-    const { data: user, error: userError } = await (email
-      ? userQuery.eq("email", email).single()
-      : userQuery.eq("phone_number", phone_number).single());
+    const { data: users, error: userError } = await (email
+      ? userQuery.ilike("email", email).limit(1)
+      : userQuery.in("phone_number", phoneVariants(phone_number)).limit(1));
+    const user = users?.[0];
 
     if (userError || !user) {
       console.error(`❌ [RESET-PASSWORD-OTP] User not found`);

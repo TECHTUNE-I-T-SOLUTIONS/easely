@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase"
+import { normalizeEmail, normalizePhone, phoneVariants } from "@/lib/auth-normalize"
 
 /**
  * POST /api/otp/verify
@@ -20,7 +21,9 @@ import { supabaseAdmin } from "@/lib/supabase"
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { pinId, pin, code, phone_number, email, type } = body
+    const { pinId, pin, code, type } = body
+    const phone_number = body.phone_number ? normalizePhone(body.phone_number) : ""
+    const email = body.email ? normalizeEmail(body.email) : ""
 
     // Handle legacy Termii PIN verification (for backward compatibility)
     if (pinId && pin) {
@@ -64,9 +67,9 @@ export async function POST(request: NextRequest) {
 
     // Add phone or email filter
     if (phone_number) {
-      query = query.eq("phone_number", phone_number)
+      query = query.in("phone_number", phoneVariants(phone_number))
     } else if (email) {
-      query = query.eq("email", email)
+      query = query.ilike("email", email)
     }
 
     const { data: otpRecords, error: findError } = await query
