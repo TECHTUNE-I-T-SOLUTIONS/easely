@@ -25,6 +25,8 @@ export async function DELETE(request: NextRequest) {
       supabaseAdmin.from("push_subscriptions").delete().eq("user_id", userId),
       supabaseAdmin.from("notification_preferences").delete().eq("user_id", userId),
       supabaseAdmin.from("notifications").delete().eq("user_id", userId),
+      supabaseAdmin.from("otps").delete().eq("user_id", userId),
+      supabaseAdmin.from("user_locations").delete().eq("user_id", userId),
     ])
 
     await supabaseAdmin
@@ -42,24 +44,43 @@ export async function DELETE(request: NextRequest) {
       })
       .eq("user_id", userId)
 
-    const { error: userError } = await supabaseAdmin
+    const userDeletionPayload = {
+      first_name: "Deleted",
+      last_name: "User",
+      email: anonymizedEmail,
+      phone_number: anonymizedPhone,
+      password_hash: passwordHash,
+      profile_picture_url: null,
+      emergency_contact: null,
+      emergency_phone: null,
+      password_reset_token: null,
+      password_reset_expiry: null,
+      profile_complete: false,
+      status: "deleted",
+      updated_at: deletedStamp,
+      deleted_at: deletedStamp,
+      deletion_reason: "user_requested",
+    }
+
+    let { error: userError } = await supabaseAdmin
       .from("users")
-      .update({
-        first_name: "Deleted",
-        last_name: "User",
-        email: anonymizedEmail,
-        phone_number: anonymizedPhone,
-        password_hash: passwordHash,
-        profile_picture_url: null,
-        emergency_contact: null,
-        emergency_phone: null,
-        password_reset_token: null,
-        password_reset_expiry: null,
-        profile_complete: false,
-        status: "suspended",
-        updated_at: deletedStamp,
-      })
+      .update(userDeletionPayload)
       .eq("id", userId)
+
+    if (userError?.code === "42703" || userError?.code === "23514") {
+      const fallbackPayload = {
+        ...userDeletionPayload,
+        status: "suspended",
+      } as any
+      delete fallbackPayload.deleted_at
+      delete fallbackPayload.deletion_reason
+
+      const fallback = await supabaseAdmin
+        .from("users")
+        .update(fallbackPayload)
+        .eq("id", userId)
+      userError = fallback.error
+    }
 
     if (userError) {
       console.error("[AccountDeletion] Failed to anonymize user:", userError)
