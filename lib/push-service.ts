@@ -400,11 +400,12 @@ export const broadcastToDrivers = async (
       return;
     }
 
-    // Get all drivers who have valid (non-placeholder) push tokens
+    // Ride request broadcasts must only reach online, verified drivers.
     const { data: drivers, error } = await supabaseAdmin
-      .from('users')
-      .select('id')
-      .eq('role', 'driver')
+      .from('drivers')
+      .select('user_id')
+      .eq('availability_status', 'online')
+      .eq('verified', true)
       .limit(10000);
 
     if (error) {
@@ -413,7 +414,8 @@ export const broadcastToDrivers = async (
     }
 
     const driverIds = (drivers || [])
-      .map((d: any) => d.id)
+      .map((d: any) => d.user_id)
+      .filter(Boolean)
       .filter((id: string) => !excludeUserIds.includes(id));
     console.log(`📢 [PUSH] Found ${driverIds.length} drivers to notify`);
     

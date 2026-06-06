@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import bcrypt from "bcryptjs"
-import { createHash } from "crypto"
+import { createHash, randomUUID } from "crypto"
 import { getSessionFromRequest } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase"
 
@@ -37,7 +37,7 @@ export async function DELETE(request: NextRequest) {
     const deletedStamp = new Date().toISOString()
     const anonymizedEmail = `deleted-${userId}@deleted.charterkeke.local`
     const anonymizedPhone = `deleted-${userId.slice(0, 18)}`
-    const passwordHash = await bcrypt.hash(`deleted:${userId}:${deletedStamp}:${crypto.randomUUID()}`, 10)
+    const passwordHash = await bcrypt.hash(`deleted:${userId}:${deletedStamp}:${randomUUID()}`, 10)
 
     const { data: existingUser } = await supabaseAdmin
       .from("users")
@@ -114,7 +114,8 @@ export async function DELETE(request: NextRequest) {
       .update(userDeletionPayload)
       .eq("id", userId)
 
-    if (userError?.code === "42703" || userError?.code === "23514") {
+    if (userError) {
+      console.warn("[AccountDeletion] Full anonymization failed; trying compatibility payload:", userError)
       const fallbackPayload = {
         ...userDeletionPayload,
         status: "suspended",
@@ -127,6 +128,19 @@ export async function DELETE(request: NextRequest) {
         .update(fallbackPayload)
         .eq("id", userId)
       userError = fallback.error
+    }
+
+    if (userError) {
+      console.warn("[AccountDeletion] Compatibility payload failed; trying minimum login lock:", userError)
+      const minimumFallback = await supabaseAdmin
+        .from("users")
+        .update({
+          password_hash: passwordHash,
+          status: "suspended",
+          updated_at: deletedStamp,
+        })
+        .eq("id", userId)
+      userError = minimumFallback.error
     }
 
     if (userError) {
