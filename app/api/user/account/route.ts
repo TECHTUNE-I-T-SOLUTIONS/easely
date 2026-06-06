@@ -36,7 +36,7 @@ export async function DELETE(request: NextRequest) {
     const userId = session.user.id
     const deletedStamp = new Date().toISOString()
     const anonymizedEmail = `deleted-${userId}@deleted.charterkeke.local`
-    const anonymizedPhone = `deleted-${userId.slice(0, 18)}`
+    const anonymizedPhone = `del-${userId.replace(/-/g, "").slice(0, 16)}`
     const passwordHash = await bcrypt.hash(`deleted:${userId}:${deletedStamp}:${randomUUID()}`, 10)
 
     const { data: existingUser } = await supabaseAdmin

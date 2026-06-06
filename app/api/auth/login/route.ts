@@ -110,8 +110,31 @@ export async function POST(request: NextRequest) {
     // Check if user is active
     if (user.status !== "active") {
       console.error("❌ [LOGIN] User not active. Status:", user.status);
+      let hasDeletedLedger = false;
+      if (user.status === "suspended") {
+        const { data: deletedAccount } = await supabaseAdmin
+          .from("deleted_accounts")
+          .select("id")
+          .eq("original_user_id", user.id)
+          .maybeSingle();
+        hasDeletedLedger = Boolean(deletedAccount?.id);
+      }
+
+      const isDeletedAccount =
+        user.status === "deleted" ||
+        Boolean(user.deleted_at) ||
+        String(user.deletion_reason || "").toLowerCase() === "user_requested" ||
+        hasDeletedLedger;
+
+      if (isDeletedAccount) {
+        return NextResponse.json(
+          { error: "Account not found. Please create a new account to continue." },
+          { status: 404 }
+        );
+      }
+
       return NextResponse.json(
-        { error: `Account is ${user.status}. Please complete your profile.` },
+        { error: user.status === "suspended" ? "This account is currently unavailable. Please contact support." : `Account is ${user.status}. Please complete your profile.` },
         { status: 403 }
       );
     }
