@@ -82,13 +82,31 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify ride status is valid for update
+    if (status === "in_progress" && ride.status === "in_progress") {
+      return NextResponse.json({
+        success: true,
+        ride,
+        alreadyUpdated: true,
+        message: "Ride is already in progress",
+      })
+    }
+
+    if (status === "completed" && ride.status === "completed") {
+      return NextResponse.json({
+        success: true,
+        ride,
+        alreadyUpdated: true,
+        message: "Ride is already completed",
+      })
+    }
+
     if (status === "in_progress" && ride.status !== "accepted") {
       console.error("[UpdateRideStatus] Invalid status transition", {
         currentStatus: ride.status,
         requestedStatus: status,
       })
       return NextResponse.json(
-        { error: "Ride must be accepted first" },
+        { error: "Ride must be accepted first", currentStatus: ride.status, ride },
         { status: 409 }
       )
     }
@@ -99,7 +117,7 @@ export async function POST(request: NextRequest) {
         requestedStatus: status,
       })
       return NextResponse.json(
-        { error: "Ride must be in progress" },
+        { error: "Ride must be in progress", currentStatus: ride.status, ride },
         { status: 409 }
       )
     }

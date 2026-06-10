@@ -93,7 +93,7 @@ async function resolveContactUserId(fromEmail: string, fromName: string | null):
     .insert({
       first_name: firstName,
       last_name: lastName,
-      phone_number: normalizedEmail,
+      phone_number: `email:${normalizedEmail}`,
       email: normalizedEmail,
       role: "user",
       status: "active",

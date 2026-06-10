@@ -277,6 +277,16 @@ export const sendPushNotification = async (
             continue;
           }
 
+          if (
+            (subscription.platform === 'ios' || subscription.platform === 'android') &&
+            !String(pushToken).startsWith('ExponentPushToken')
+          ) {
+            console.warn(`⚠️ [PUSH] Deactivating non-Expo mobile token for user: ${userId}`);
+            await removeSubscription(userId, pushToken).catch(() => {});
+            results.push({ userId, success: false, error: 'Invalid Expo push token' });
+            continue;
+          }
+
           const notificationPayload = {
             title: payload.title,
             body: payload.body,

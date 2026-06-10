@@ -180,6 +180,8 @@ export async function POST(request: NextRequest) {
       `Your ride request from ${pickupZone} to ${destinationZone} has been created successfully.`
     )
 
+    const smsQueuedUserIds = new Set<string>()
+
     // Additional SMS + in-app dispatch logs/notifications
     if (drivers && drivers.length > 0) {
       const driverUserIds = drivers.map((driver: any) => driver.user_id)
@@ -308,6 +310,7 @@ export async function POST(request: NextRequest) {
                 throw err
               })
           )
+          smsQueuedUserIds.add(driver.user_id)
         } else {
           console.warn("[RideDispatch] Online driver skipped - no phone number", {
             rideId: ride.id,
@@ -355,6 +358,77 @@ export async function POST(request: NextRequest) {
         rideId: ride.id,
         pickupZone,
       })
+    }
+
+    // SMS must reach verified drivers even when they are offline, because many drivers keep data off.
+    try {
+      const { data: allVerifiedDrivers, error: verifiedDriversError } = await supabaseAdmin
+        .from("drivers")
+        .select("id, user_id")
+        .eq("verified", true)
+        .limit(500)
+
+      if (verifiedDriversError) {
+        console.error("[RideDispatch] Failed to fetch verified drivers for offline SMS:", verifiedDriversError)
+      }
+
+      const offlineSmsDrivers = (allVerifiedDrivers || []).filter((driver: any) => !smsQueuedUserIds.has(driver.user_id))
+      const offlineDriverUserIds = offlineSmsDrivers.map((driver: any) => driver.user_id).filter(Boolean)
+
+      if (offlineDriverUserIds.length > 0) {
+        const { data: offlineDriverUsers } = await supabaseAdmin
+          .from("users")
+          .select("id, phone_number")
+          .in("id", offlineDriverUserIds)
+
+        const phoneByUserId = new Map<string, string>()
+        for (const user of offlineDriverUsers || []) {
+          if (user.phone_number) phoneByUserId.set(user.id, user.phone_number)
+        }
+
+        const offlineSmsTasks = offlineSmsDrivers
+          .map((driver: any) => {
+            const driverPhone = phoneByUserId.get(driver.user_id)
+            if (!driverPhone || !toTermiiPhoneNumber(driverPhone)) return null
+
+            return sendRideRequestSMS({
+              to: driverPhone,
+              rideId: ride.id,
+              pickup: pickupZone,
+              destination: destinationZone,
+              pickupTime: ride.pickup_time || parsedPickupTime,
+              fare: Number(final_fare_amount || 0),
+            })
+              .then(() =>
+                supabaseAdmin.from("ride_dispatch_logs").insert([
+                  {
+                    ride_id: ride.id,
+                    driver_id: driver.id,
+                    dispatch_method: "sms",
+                    created_at: new Date().toISOString(),
+                  },
+                ])
+              )
+              .catch((err) => {
+                console.error("[RideDispatch] Offline driver SMS failed", {
+                  rideId: ride.id,
+                  driverId: driver.id,
+                  error: err?.message || String(err),
+                })
+              })
+          })
+          .filter(Boolean) as Promise<any>[]
+
+        const offlineSmsResults = await Promise.allSettled(offlineSmsTasks)
+        console.log("[RideDispatch] Verified/offline driver SMS summary", {
+          rideId: ride.id,
+          attempted: offlineSmsTasks.length,
+          successful: offlineSmsResults.filter((result) => result.status === "fulfilled").length,
+          failed: offlineSmsResults.filter((result) => result.status === "rejected").length,
+        })
+      }
+    } catch (offlineSmsError) {
+      console.error("[RideDispatch] Verified/offline driver SMS dispatch crashed:", offlineSmsError)
     }
 
     return NextResponse.json({
