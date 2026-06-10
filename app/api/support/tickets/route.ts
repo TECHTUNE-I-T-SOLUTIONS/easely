@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
+import { notifyAdmins } from "@/lib/admin-notifications";
 import { supabaseAdmin } from "@/lib/supabase";
 
 async function getAdminIdForUser(userId: string): Promise<string | null> {
@@ -169,6 +170,17 @@ export async function POST(request: NextRequest) {
         console.error("[SUPPORT][TICKETS][POST] failed to insert first message", msgError);
       }
     }
+
+    await notifyAdmins({
+      allAdmins: true,
+      department: "support",
+      title: "New support ticket",
+      body: `${session.user.firstName || "A customer"} opened "${subject}".`,
+      type: "support_ticket",
+      actionUrl: `/admin/crm?ticket=${ticket.id}`,
+      metadata: { ticketId: ticket.id, userId: session.user.id, category, priority },
+      sourceEventId: `support_ticket_created:${ticket.id}`,
+    }).catch((error) => console.error("[SUPPORT][TICKETS][ADMIN_NOTIFY]", error));
 
     return NextResponse.json({ ticket }, { status: 201 });
   } catch (error) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase"
 import { getSessionFromRequest } from "@/lib/auth"
 import { notifyDriverAboutRide } from "@/lib/notifications"
+import { notifyAdmins } from "@/lib/admin-notifications"
 import { emitRideRequest, emitRideUpdate } from "@/lib/push-emitters"
 import { sendRideRequestSMS, toTermiiPhoneNumber } from "@/lib/termii"
 import { sendPushNotification } from "@/lib/push-service"
@@ -110,6 +111,23 @@ export async function POST(request: NextRequest) {
       console.error("Failed to create ride:", error)
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
+
+    await notifyAdmins({
+      allAdmins: true,
+      department: "ops",
+      title: "New ride requested",
+      body: `${session.user.firstName || "A rider"} requested a ride from ${pickup_location.address} to ${dropoff_location.address}.`,
+      type: "ride_requested",
+      actionUrl: `/admin/rides?ride=${ride.id}`,
+      metadata: {
+        rideId: ride.id,
+        riderId: session.user.id,
+        pickup: pickup_location.address,
+        destination: dropoff_location.address,
+        fare: Number(final_fare_amount || 0),
+      },
+      sourceEventId: `ride_requested:${ride.id}`,
+    }).catch((notifyError) => console.error("[BookRide] Admin notification failed:", notifyError))
 
     // Find available drivers in the pickup zone
     const pickupZone = pickup_location.address

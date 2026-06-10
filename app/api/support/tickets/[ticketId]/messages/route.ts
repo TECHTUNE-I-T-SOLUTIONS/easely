@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
+import { notifyAdmins } from "@/lib/admin-notifications";
 import { supabaseAdmin } from "@/lib/supabase";
 
 type Params = { params: Promise<{ ticketId: string }> };
@@ -110,6 +111,19 @@ export async function POST(request: NextRequest, { params }: Params) {
     }
 
     await supabaseAdmin.from("support_tickets").update(ticketUpdate).eq("id", ticketId);
+
+    if (!isAdmin) {
+      await notifyAdmins({
+        allAdmins: true,
+        department: "support",
+        title: "New support message",
+        body: `${session.user.firstName || "A customer"} replied to a support ticket.`,
+        type: "support_message",
+        actionUrl: `/admin/crm?ticket=${ticketId}`,
+        metadata: { ticketId, userId: session.user.id, messageId: created?.id },
+        sourceEventId: `support_message:${created?.id || ticketId}`,
+      }).catch((error) => console.error("[SUPPORT][MESSAGES][ADMIN_NOTIFY]", error));
+    }
 
     return NextResponse.json({ message: created }, { status: 201 });
   } catch (error) {

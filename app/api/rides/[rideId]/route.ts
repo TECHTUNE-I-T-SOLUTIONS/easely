@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/auth"
+import { notifyAdmins } from "@/lib/admin-notifications"
 import { supabaseAdmin } from "@/lib/supabase"
 import { sendPushNotification } from "@/lib/push-service"
 
@@ -146,6 +147,22 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       } catch (pushError) {
         console.warn("[Rides/:id][PUT] cancellation push failed:", pushError)
       }
+
+      await notifyAdmins({
+        allAdmins: true,
+        department: "ops",
+        title: "Ride cancelled",
+        body: `Ride ${rideId.slice(0, 8)} was cancelled. ${cancellationReason || "User cancelled"}.`,
+        type: "ride_cancelled",
+        actionUrl: `/admin/rides?ride=${rideId}`,
+        metadata: {
+          rideId,
+          riderId: existingRide.rider_id,
+          driverUserId: existingRide.assigned_driver_id,
+          cancellationReason: cancellationReason || "User cancelled",
+        },
+        sourceEventId: `ride_cancelled:${rideId}`,
+      }).catch((notifyError) => console.error("[Rides/:id][PUT] Admin notification failed:", notifyError))
 
       return NextResponse.json({ success: true, ride: updatedRide })
     }

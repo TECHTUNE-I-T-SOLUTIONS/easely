@@ -3,6 +3,7 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { acceptRideFirstCome } from "@/lib/ride-acceptance";
 import { getDriverRemittanceSummary } from "@/lib/driver-settlement";
 import { supabaseAdmin } from "@/lib/supabase";
+import { notifyAdmins } from "@/lib/admin-notifications";
 import { sendPushNotification } from "@/lib/push-service";
 
 export async function POST(request: NextRequest) {
@@ -105,8 +106,32 @@ export async function POST(request: NextRequest) {
         rideId,
         riderId: ride.rider_id,
       });
+
     } catch (pushError) {
-      console.error("[AcceptRide] Failed to send push notification:", pushError);
+      console.error("[AcceptRide] Failed to send notification:", pushError);
+    }
+
+    try {
+      const ride = acceptance.ride;
+      const { data: driverUser } = await supabaseAdmin!
+        .from("users")
+        .select("first_name, last_name")
+        .eq("id", session.user.id)
+        .single();
+      const driverName = driverUser ? `${driverUser.first_name} ${driverUser.last_name}` : "A driver";
+
+      await notifyAdmins({
+        allAdmins: true,
+        department: "ops",
+        title: "Ride accepted",
+        body: `${driverName} accepted a ride from ${ride.pickup_zone} to ${ride.destination_zone}.`,
+        type: "ride_accepted",
+        actionUrl: `/admin/rides?ride=${ride.id}`,
+        metadata: { rideId: ride.id, riderId: ride.rider_id, driverUserId: session.user.id, driverId: driver.id },
+        sourceEventId: `ride_accepted:${ride.id}:${session.user.id}`,
+      });
+    } catch (notifyError) {
+      console.error("[AcceptRide] Admin notification failed:", notifyError);
     }
 
     return NextResponse.json({

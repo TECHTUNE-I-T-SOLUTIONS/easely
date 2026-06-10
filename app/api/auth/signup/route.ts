@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { uploadFileWithServiceRole } from "@/lib/upload-file";
 import { sendWelcomeEmail } from "@/lib/welcome-email";
 import { normalizeEmail, normalizePhone, phoneVariants } from "@/lib/auth-normalize";
+import { notifyAdmins } from "@/lib/admin-notifications";
 
 function errorResponse(status: number, error: string, meta?: Record<string, unknown>) {
   return NextResponse.json(
@@ -346,6 +347,18 @@ export async function POST(request: NextRequest) {
       operatingZones: operatingZones || null,
     }).catch((emailError) => {
       console.error("Welcome email send failed:", emailError);
+    });
+
+    notifyAdmins({
+      allAdmins: true,
+      title: role === "driver" ? "New driver signup" : role === "admin" ? "New admin signup" : "New rider signup",
+      body: `${firstName} ${lastName} signed up as ${role}.`,
+      type: "user_signup",
+      actionUrl: `/admin/users?user=${newUser.id}`,
+      metadata: { userId: newUser.id, role, email, phone },
+      sourceEventId: `user_signup:${newUser.id}`,
+    }).catch((notifyError) => {
+      console.error("Admin signup notification failed:", notifyError);
     });
 
     return NextResponse.json(

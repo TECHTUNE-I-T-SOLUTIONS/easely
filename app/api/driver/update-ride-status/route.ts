@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabase, supabaseAdmin } from "@/lib/supabase"
 import { getSessionFromRequest } from "@/lib/auth"
+import { notifyAdmins } from "@/lib/admin-notifications"
 import { emitDriverArrived, emitRideCompleted, emitRideUpdate } from "@/lib/push-emitters"
 import { sendPushNotification } from "@/lib/push-service"
 import { cancelExpiredOpenRides, isRideExpired } from "@/lib/ride-expiry"
@@ -270,6 +271,17 @@ export async function POST(request: NextRequest) {
       console.error("Failed to send status notifications:", notificationError)
       // Don't fail the entire request if notifications fail
     }
+
+    await notifyAdmins({
+      allAdmins: true,
+      department: "ops",
+      title: status === "completed" ? "Ride completed" : "Ride started",
+      body: `Ride ${rideId.slice(0, 8)} is now ${status.replace("_", " ")} from ${ride.pickup_zone} to ${ride.destination_zone}.`,
+      type: status === "completed" ? "ride_completed" : "ride_started",
+      actionUrl: `/admin/rides?ride=${rideId}`,
+      metadata: { rideId, riderId: ride.rider_id, driverUserId: session.user.id, status },
+      sourceEventId: `ride_status:${rideId}:${status}`,
+    }).catch((notifyError) => console.error("[UpdateRideStatus] Admin notification failed:", notifyError))
 
     return NextResponse.json({
       success: true,
