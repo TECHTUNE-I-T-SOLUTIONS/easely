@@ -72,6 +72,58 @@ function smtpTransport(password = env("CRM_EMAIL_SMTP_PASSWORD")) {
   })
 }
 
+function escapeHtml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;")
+}
+
+function renderTextAsHtml(value: string) {
+  return escapeHtml(value)
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p style="margin:0 0 14px;font-size:16px;line-height:1.65;color:#333">${paragraph.replace(/\n/g, "<br/>")}</p>`)
+    .join("")
+}
+
+function renderSupportReplyEmail({
+  customerName,
+  ticketId,
+  subject,
+  reply,
+}: {
+  customerName?: string | null
+  ticketId: string
+  subject: string
+  reply: string
+}) {
+  const safeName = escapeHtml(customerName || "there")
+  const safeTicket = escapeHtml(ticketId)
+  const safeSubject = escapeHtml(subject || "Support Request")
+  return `
+    <div style="margin:0;padding:0;background:#f6f2ec;font-family:Arial,Helvetica,sans-serif;color:#171717">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f2ec;padding:28px 12px">
+        <tr><td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#fff;border:1px solid #f0dec8;border-radius:22px;overflow:hidden">
+            <tr><td style="background:#111;padding:24px 28px;color:#fff">
+              <div style="font-size:12px;font-weight:900;letter-spacing:.18em;text-transform:uppercase;color:#ff8a00">Orika - Charter Keke Support</div>
+              <div style="font-size:26px;line-height:1.25;font-weight:900;margin-top:6px">Your journey assistant replied</div>
+            </td></tr>
+            <tr><td style="padding:30px 28px">
+              <p style="margin:0 0 14px;font-size:16px;line-height:1.65;color:#333">Hello ${safeName},</p>
+              ${renderTextAsHtml(reply)}
+              <div style="background:#fff5e8;border:1px solid #f0dec8;border-radius:18px;padding:18px;margin-top:10px;margin-bottom:22px">
+                <div style="font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#9a5a00;font-weight:800">Ticket reference</div>
+                <div style="font-size:20px;font-weight:900;color:#171717;margin-top:6px">${safeTicket}</div>
+                <div style="font-size:14px;color:#555;margin-top:8px">${safeSubject}</div>
+              </div>
+              <p style="margin:0;font-size:14px;line-height:1.6;color:#6b7280">Reply to this email with any extra details. If your issue needs a human support agent, Orika will route it to the right Charter Keke team.</p>
+            </td></tr>
+            <tr><td style="background:#ff8a00;padding:16px 28px;color:#111;font-size:13px;font-weight:700">Charter Keke - Affordable Keke rides in Lagos</td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </div>
+  `
+}
+
 async function resolveContactUserId(fromEmail: string, fromName: string | null): Promise<string | null> {
   const normalizedEmail = normalizeEmailAddress(fromEmail)
   if (!normalizedEmail || !supabaseAdmin) return null
@@ -154,6 +206,35 @@ async function upsertEmailAccount(recipientEmail: string, departmentId: string |
 
   if (error) throw error
   return data?.id || null
+}
+
+async function recentTicketEmailHistory(ticketId: string, latestMessage: ParsedMessage) {
+  if (!supabaseAdmin) {
+    return [{ role: "customer" as const, content: latestMessage.bodyText || latestMessage.bodyHtml || latestMessage.subject }]
+  }
+
+  const { data } = await supabaseAdmin
+    .from("crm_email_messages")
+    .select("direction, body_text, subject, from_name")
+    .eq("ticket_id", ticketId)
+    .order("received_at", { ascending: false })
+    .limit(12)
+
+  const history = (data || [])
+    .reverse()
+    .map((item: any) => {
+      const direction = String(item.direction || "")
+      const role = direction === "outbound" ? "assistant" as const : "customer" as const
+      const content = String(item.body_text || item.subject || "").trim()
+      return content ? { role, content } : null
+    })
+    .filter(Boolean) as Array<{ role: "customer" | "assistant"; content: string }>
+
+  if (!history.length) {
+    history.push({ role: "customer", content: latestMessage.bodyText || latestMessage.bodyHtml || latestMessage.subject })
+  }
+
+  return history
 }
 
 function toHeaderRecord(headers: Map<string, unknown>): Record<string, string> {
@@ -314,13 +395,15 @@ async function persistInboundMessage(message: ParsedMessage) {
     throw emailInsertError
   }
 
+  const resolvedTicketId = String(ticketId)
+
   const ai = await generateSupportAIReply({
     channel: "email",
     subject: message.subject,
     customerName: message.fromName,
     customerEmail: message.fromEmail,
     latestMessage: message.bodyText || message.bodyHtml || message.subject,
-    history: [{ role: "customer", content: message.bodyText || message.bodyHtml || message.subject }],
+    history: await recentTicketEmailHistory(resolvedTicketId, message),
   }).catch((error) => {
     console.error("[CRM][EMAIL][AI]", error)
     return null
@@ -330,6 +413,12 @@ async function persistInboundMessage(message: ParsedMessage) {
     const aiReply = ai?.ok && ai.reply
       ? ai.reply
       : `Hello ${message.fromName || "there"}, your message has been received and assigned ticket ${ticketId}. A customer support agent will review it and get in touch if more action is needed.`
+    const aiReplyHtml = renderSupportReplyEmail({
+      customerName: message.fromName || undefined,
+      ticketId: resolvedTicketId,
+      subject: message.subject,
+      reply: aiReply,
+    })
 
     await supabaseAdmin
       .from("crm_email_messages")
@@ -338,20 +427,25 @@ async function persistInboundMessage(message: ParsedMessage) {
         ticket_id: ticketId,
         direction: "outbound",
         from_email: env("CRM_EMAIL_AUTOREPLY_FROM", recipientEmail),
-        from_name: "Charter Keke Support",
+        from_name: "Orika",
         to_emails: [message.fromEmail],
         cc_emails: [],
         bcc_emails: [],
         subject: ai?.ok && ai.reply ? `Re: ${message.subject}` : `Ticket Received - ${ticketId}`,
         body_text: aiReply,
-        body_html: null,
+        body_html: aiReplyHtml,
         attachments: [],
         external_message_id: null,
         external_thread_id: message.threadId,
         processing_status: "queued",
         processing_reason: "Queued acknowledgment for SMTP delivery",
         raw_headers: {},
-        raw_payload: {},
+        raw_payload: {
+          automation: "orika",
+          model: ai?.model || null,
+          shouldEscalate: ai?.shouldEscalate || false,
+          category: ai?.category || null,
+        },
         received_at: new Date().toISOString(),
         processed_at: null,
       })
@@ -361,8 +455,8 @@ async function persistInboundMessage(message: ParsedMessage) {
     await notifyAdmins({
       allAdmins: true,
       department: departmentKey,
-      title: "AI escalated email support",
-      body: ai.reason || `${message.fromName || message.fromEmail} needs human support.`,
+      title: "Orika routed email support to CRM",
+      body: ai.reason || `Orika replied to ${message.fromName || message.fromEmail} and needs a human support agent to continue.`,
       type: "support_ai_escalation",
       actionUrl: `/admin/crm?ticket=${ticketId}`,
       metadata: { ticketId, fromEmail: message.fromEmail, category: ai.category, model: ai.model },
