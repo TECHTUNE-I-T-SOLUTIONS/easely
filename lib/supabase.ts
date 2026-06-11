@@ -41,7 +41,16 @@ export type Database = {
           vehicle_type: string | null;
           plate_number: string | null;
           operating_zones: string[];
-          union_name: string | null;
+          guarantor_name: string | null;
+          guarantor_phone: string | null;
+          guarantor_address: string | null;
+          bank_code: string | null;
+          identity_type: "nin" | null;
+          nin_number: string | null;
+          identity_last4: string | null;
+          identity_document_url: string | null;
+          identity_verified: boolean;
+          identity_verification_status: "not_started" | "pending_details" | "pending" | "verified" | "failed";
           availability_status: "online" | "offline" | "busy";
           bank_name: string | null;
           bank_account_number: string | null;

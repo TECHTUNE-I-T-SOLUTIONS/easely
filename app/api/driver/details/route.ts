@@ -96,7 +96,9 @@ export async function PUT(request: NextRequest) {
     const allowedDriverFields = [
       "vehicle_type",
       "plate_number",
-      "union_name",
+      "guarantor_name",
+      "guarantor_phone",
+      "guarantor_address",
       "bank_name",
       "bank_code",
       "bank_account_number",

@@ -18,7 +18,9 @@ export async function POST(request: NextRequest) {
     const vehicleType = formData.get("vehicle_type") as string | null;
     const plateNumber = formData.get("plate_number") as string | null;
     const operatingZones = formData.get("operating_zones") as string | null;
-    const unionName = formData.get("union_name") as string | null;
+    const guarantorName = formData.get("guarantor_name") as string | null;
+    const guarantorPhone = formData.get("guarantor_phone") as string | null;
+    const guarantorAddress = formData.get("guarantor_address") as string | null;
     const emergencyContact = formData.get("emergency_contact") as string | null;
     const bankName = formData.get("bank_name") as string | null;
     const bankAccountNumber = formData.get("bank_account_number") as string | null;
@@ -104,7 +106,9 @@ export async function POST(request: NextRequest) {
             operating_zones: operatingZones
               ? operatingZones.split(",").map((z) => z.trim())
               : [],
-            union_name: unionName,
+            guarantor_name: guarantorName,
+            guarantor_phone: guarantorPhone,
+            guarantor_address: guarantorAddress,
             emergency_contact: emergencyContact,
             bank_name: bankName,
             bank_account_number: bankAccountNumber,

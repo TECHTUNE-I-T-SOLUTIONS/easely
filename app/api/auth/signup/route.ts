@@ -35,8 +35,13 @@ export async function POST(request: NextRequest) {
     // Driver fields
     const vehicleType = formData.get("vehicleType") as string;
     const plateNumber = formData.get("plateNumber") as string;
-    const unionName = formData.get("unionName") as string;
+    const guarantorName = ((formData.get("guarantorName") as string) || "").trim();
+    const guarantorPhone = normalizePhone((formData.get("guarantorPhone") as string) || "");
+    const guarantorAddress = ((formData.get("guarantorAddress") as string) || "").trim();
+    const identityType = "nin";
+    const nin = ((formData.get("nin") as string) || "").replace(/\D/g, "");
     const bankName = formData.get("bankName") as string;
+    const bankCode = ((formData.get("bankCode") as string) || "").trim();
     const bankAccountNumber = formData.get("bankAccountNumber") as string;
     const accountName = (
       (formData.get("accountName") as string) ||
@@ -54,6 +59,7 @@ export async function POST(request: NextRequest) {
     const profilePictureFile = formData.get("profilePicture") as File | null;
     const vehiclePictureFile = formData.get("vehiclePicture") as File | null;
     const licensePictureFile = formData.get("licensePicture") as File | null;
+    const ninDocumentFile = formData.get("ninDocument") as File | null;
 
     // Validate input
     if (!firstName || !lastName || !email || !phone || !password) {
@@ -181,6 +187,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    let ninDocumentUrl: string | null = null;
+    if (ninDocumentFile && ninDocumentFile.size > 0) {
+      try {
+        const buffer = Buffer.from(await ninDocumentFile.arrayBuffer());
+        const timestamp = Date.now();
+        const filePath = `${email}/${timestamp}-nin.${ninDocumentFile.name.split(".").pop()}`;
+
+        const uploadResult = await uploadFileWithServiceRole(
+          "nin-documents",
+          filePath,
+          buffer,
+          ninDocumentFile.type
+        );
+
+        ninDocumentUrl = uploadResult.url;
+      } catch (uploadError) {
+        console.error("NIN document upload error:", uploadError);
+        return NextResponse.json(
+          { error: "NIN document upload failed. Please try again." },
+          { status: 502 }
+        );
+      }
+    }
+
     // Read optional referral code submitted by the client (referrer code)
     const incomingReferralCode = (formData.get("referralCode") as string) || '';
 
@@ -300,22 +330,32 @@ export async function POST(request: NextRequest) {
     if (role === "driver") {
       const driverEmergencyContact = emergencyContact || emergencyContactName || emergencyContactPhone || null;
 
-      const { error: driverError } = await supabase.from("drivers").insert({
+      const { data: driverRecord, error: driverError } = await supabase.from("drivers").insert({
         user_id: newUser.id,
         vehicle_type: vehicleType || null,
         plate_number: plateNumber || null,
-        union_name: unionName || null,
+        guarantor_name: guarantorName || null,
+        guarantor_phone: guarantorPhone || null,
+        guarantor_address: guarantorAddress || null,
         operating_zones: operatingZones
           ? operatingZones.split(",").map((zone) => zone.trim()).filter(Boolean)
           : [],
         bank_name: bankName || null,
+        bank_code: bankCode || null,
         bank_account_number: bankAccountNumber || null,
         account_name: accountName || null,
         emergency_contact: driverEmergencyContact,
         vehicle_picture_url: vehiclePictureUrl,
         license_picture_url: licensePictureUrl,
+        identity_document_url: ninDocumentUrl,
         verified: false,
-      });
+        identity_type: identityType,
+        nin_number: nin || null,
+        identity_last4: nin ? nin.slice(-4) : null,
+        identity_verified: false,
+        identity_verification_status: nin && ninDocumentUrl ? "pending" : "pending_details",
+        identity_verification_provider: "manual_admin",
+      }).select("id").single();
 
       if (driverError) {
         console.error("Driver record creation error:", driverError);
@@ -389,4 +429,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
 

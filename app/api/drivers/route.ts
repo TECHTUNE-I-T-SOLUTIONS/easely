@@ -57,9 +57,13 @@ export async function POST(request: NextRequest) {
     const userId = formData.get("userId") as string;
     const vehicleType = formData.get("vehicleType") as string;
     const plateNumber = formData.get("plateNumber") as string;
-    const unionName = formData.get("unionName") as string;
+    const guarantorName = ((formData.get("guarantorName") as string) || "").trim();
+    const guarantorPhone = ((formData.get("guarantorPhone") as string) || "").trim();
+    const guarantorAddress = ((formData.get("guarantorAddress") as string) || "").trim();
+    const nin = ((formData.get("nin") as string) || "").replace(/\D/g, "");
     const operatingZonesStr = formData.get("operatingZones") as string;
     const bankName = formData.get("bankName") as string;
+    const bankCode = ((formData.get("bankCode") as string) || "").trim();
     const bankAccountNumber = formData.get("bankAccountNumber") as string;
     const emergencyContact = formData.get("emergencyContact") as string;
 
@@ -68,13 +72,17 @@ export async function POST(request: NextRequest) {
     const licensePictureFile = formData.get("licensePicture") as File | null;
 
     // Validate required fields
-    if (!userId || !vehicleType || !plateNumber || !bankName || !bankAccountNumber || !unionName || !emergencyContact) {
+    if (!userId || !vehicleType || !plateNumber || !bankName || !bankCode || !bankAccountNumber || !guarantorName || !guarantorPhone || !guarantorAddress || nin.length !== 11 || !emergencyContact) {
       console.error("Missing driver fields:", {
         userId: userId ? "✓" : "missing",
         vehicleType: vehicleType ? "✓" : "missing",
         plateNumber: plateNumber ? "✓" : "missing",
-        unionName: unionName ? "✓" : "missing",
+        guarantorName: guarantorName ? "ok" : "missing",
+        guarantorPhone: guarantorPhone ? "ok" : "missing",
+        guarantorAddress: guarantorAddress ? "ok" : "missing",
+        nin: nin.length === 11 ? "ok" : "missing",
         bankName: bankName ? "✓" : "missing",
+        bankCode: bankCode ? "ok" : "missing",
         bankAccountNumber: bankAccountNumber ? "✓" : "missing",
         operatingZones: operatingZonesStr ? "✓" : "missing",
         emergencyContact: emergencyContact ? "✓" : "missing",
@@ -86,8 +94,12 @@ export async function POST(request: NextRequest) {
             userId: !userId ? "User ID required" : null,
             vehicleType: !vehicleType ? "Vehicle type required" : null,
             plateNumber: !plateNumber ? "Plate number required" : null,
-            unionName: !unionName ? "Union name required" : null,
+            guarantorName: !guarantorName ? "Guarantor name required" : null,
+            guarantorPhone: !guarantorPhone ? "Guarantor phone required" : null,
+            guarantorAddress: !guarantorAddress ? "Guarantor address required" : null,
+            nin: nin.length !== 11 ? "Valid 11-digit NIN required" : null,
             bankName: !bankName ? "Bank name required" : null,
+            bankCode: !bankCode ? "Bank code required" : null,
             bankAccountNumber: !bankAccountNumber ? "Bank account number required" : null,
             emergencyContact: !emergencyContact ? "Emergency contact required" : null,
           }
@@ -174,14 +186,22 @@ export async function POST(request: NextRequest) {
           user_id: userId,
           vehicle_type: vehicleType,
           plate_number: plateNumber,
-          union_name: unionName,
+          guarantor_name: guarantorName,
+          guarantor_phone: guarantorPhone,
+          guarantor_address: guarantorAddress,
           operating_zones: operatingZones,
           bank_name: bankName,
+          bank_code: bankCode,
           bank_account_number: bankAccountNumber,
           emergency_contact: emergencyContact,
           vehicle_picture_url: vehiclePictureUrl,
           license_picture_url: licensePictureUrl,
           verified: false,
+          identity_type: "nin",
+          nin_number: nin || null,
+          identity_last4: nin.slice(-4),
+          identity_verification_status: "pending_details",
+          identity_verification_provider: "manual_admin",
         },
       ])
       .select()
@@ -204,3 +224,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+
