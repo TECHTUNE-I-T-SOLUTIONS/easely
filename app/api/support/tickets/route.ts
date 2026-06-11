@@ -25,6 +25,50 @@ async function getAutomationSenderId(): Promise<string | null> {
   return data?.user_id || null;
 }
 
+async function getOrCreateInAppConversation(userId: string, subject: string) {
+  if (!supabaseAdmin) return null;
+
+  const { data: existing } = await supabaseAdmin
+    .from("support_conversations")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("source_channel", "in_app")
+    .neq("status", "closed")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existing?.id) return existing;
+
+  const { data, error } = await supabaseAdmin
+    .from("support_conversations")
+    .insert({
+      user_id: userId,
+      source_channel: "in_app",
+      subject,
+      status: "open",
+      metadata: { source: "mobile_app" },
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    console.error("[SUPPORT][CONVERSATION][CREATE]", error);
+    return null;
+  }
+
+  return data;
+}
+
+async function getNextCaseNumber(conversationId: string | null) {
+  if (!conversationId || !supabaseAdmin) return 1;
+  const { count } = await supabaseAdmin
+    .from("support_tickets")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId);
+  return (count || 0) + 1;
+}
+
 export async function GET(request: NextRequest) {
   try {
     if (!supabaseAdmin) {
@@ -146,11 +190,16 @@ export async function POST(request: NextRequest) {
     }
 
     const now = new Date().toISOString();
+    const conversation = await getOrCreateInAppConversation(session.user.id, subject);
+    const caseNumber = await getNextCaseNumber(conversation?.id || null);
 
     const { data: ticket, error: ticketError } = await supabaseAdmin
       .from("support_tickets")
       .insert({
         user_id: session.user.id,
+        conversation_id: conversation?.id || null,
+        case_number: caseNumber,
+        case_source: "manual",
         subject,
         description,
         category,
@@ -173,6 +222,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: ticketError?.message || "Failed to create ticket" }, { status: 400 });
     }
 
+    if (conversation?.id) {
+      await supabaseAdmin
+        .from("support_conversations")
+        .update({ last_message_at: now, updated_at: now, status: "in_progress" })
+        .eq("id", conversation.id);
+    }
+
     const firstMessageText = (initialMessage || description || "").trim();
     if (firstMessageText) {
       const { error: msgError } = await supabaseAdmin.from("ticket_messages").insert({
@@ -181,6 +237,9 @@ export async function POST(request: NextRequest) {
         message: firstMessageText,
         attachments,
         message_type: attachments?.length ? "image" : "text",
+        sender_type: "user",
+        sender_label: session.user.firstName || "Customer",
+        metadata: { conversationId: conversation?.id || null, caseNumber },
       });
 
       if (msgError) {
@@ -220,6 +279,10 @@ export async function POST(request: NextRequest) {
             message: ai.reply,
             message_type: "text",
             is_internal: false,
+            sender_type: "assistant",
+            sender_label: "Dapo - Charter Keke assistant",
+            department_key: ai.department || "support",
+            metadata: { conversationId: conversation?.id || null, caseNumber, model: ai.model, category: ai.category },
           });
         }
       }

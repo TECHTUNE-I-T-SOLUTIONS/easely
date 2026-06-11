@@ -108,6 +108,38 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unable to resolve sender contact" }, { status: 400 })
     }
 
+    const normalizedThreadKey = threadId || messageId || `${fromEmail}:${recipientEmail}:${subject}`.toLowerCase()
+    let conversationId: string | null = null
+    if (normalizedThreadKey) {
+      const { data: existingConversation } = await supabaseAdmin
+        .from("support_conversations")
+        .select("id")
+        .eq("source_channel", "email")
+        .eq("external_thread_id", normalizedThreadKey)
+        .maybeSingle()
+
+      if (existingConversation?.id) {
+        conversationId = existingConversation.id
+      } else {
+        const { data: createdConversation } = await supabaseAdmin
+          .from("support_conversations")
+          .insert({
+            user_id: contactUserId,
+            source_channel: "email",
+            source_email: fromEmail || null,
+            source_name: fromName,
+            external_thread_id: normalizedThreadKey,
+            subject: subject || `Email from ${fromEmail || "customer"}`,
+            status: "open",
+            last_message_at: receivedAt,
+            metadata: { recipientEmail, departmentKey },
+          })
+          .select("id")
+          .single()
+        conversationId = createdConversation?.id || null
+      }
+    }
+
     let ticketId = body?.ticketId ? String(body.ticketId) : null
     if (!ticketId && threadId) {
       const { data: existingTicket } = await supabaseAdmin
@@ -125,6 +157,9 @@ export async function POST(request: NextRequest) {
         .from("support_tickets")
         .insert({
           user_id: contactUserId,
+          conversation_id: conversationId,
+          case_number: 1,
+          case_source: "email",
           subject: subject || `Email from ${fromEmail || recipientEmail || "customer"}`,
           description: textBody || htmlBody || subject || "Incoming email",
           category: departmentKey,
@@ -194,6 +229,7 @@ export async function POST(request: NextRequest) {
     await supabaseAdmin
       .from("support_tickets")
       .update({
+        conversation_id: conversationId,
         source_channel: "email",
         department_id: effectiveDepartmentId,
         external_thread_id: threadId,
@@ -202,6 +238,13 @@ export async function POST(request: NextRequest) {
         updated_at: receivedAt,
       })
       .eq("id", ticketId)
+
+    if (conversationId) {
+      await supabaseAdmin
+        .from("support_conversations")
+        .update({ last_message_at: receivedAt, updated_at: receivedAt, status: "in_progress" })
+        .eq("id", conversationId)
+    }
 
     const { data: outboundAck } = await supabaseAdmin
       .from("crm_email_messages")

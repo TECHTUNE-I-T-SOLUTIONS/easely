@@ -17,6 +17,15 @@ async function getAutomationSenderId(): Promise<string | null> {
   return data?.user_id || null;
 }
 
+async function getNextCaseNumber(conversationId: string | null) {
+  if (!conversationId || !supabaseAdmin) return 1;
+  const { count } = await supabaseAdmin
+    .from("support_tickets")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId);
+  return (count || 0) + 1;
+}
+
 export async function POST(request: NextRequest, { params }: Params) {
   try {
     if (!supabaseAdmin) {
@@ -48,20 +57,56 @@ export async function POST(request: NextRequest, { params }: Params) {
 
     const isAdmin = session.user.role === "admin" || session.user.role === "super_admin";
 
-    let ticketQuery = supabaseAdmin.from("support_tickets").select("id, user_id, status, subject").eq("id", ticketId);
+    let ticketQuery = supabaseAdmin
+      .from("support_tickets")
+      .select("id, user_id, status, subject, category, priority, conversation_id")
+      .eq("id", ticketId);
     if (!isAdmin) {
       ticketQuery = ticketQuery.eq("user_id", session.user.id);
     }
 
-    const { data: ticket, error: ticketError } = await ticketQuery.single();
+    let { data: ticket, error: ticketError } = await ticketQuery.single();
     if (ticketError || !ticket) {
       return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
     }
 
     const now = new Date().toISOString();
+    let targetTicketId = ticketId;
+
+    if (!isAdmin && (ticket.status === "resolved" || ticket.status === "closed")) {
+      const caseNumber = await getNextCaseNumber(ticket.conversation_id || null);
+      const { data: nextTicket, error: nextTicketError } = await supabaseAdmin
+        .from("support_tickets")
+        .insert({
+          user_id: session.user.id,
+          conversation_id: ticket.conversation_id || null,
+          case_number: caseNumber,
+          case_source: "ai",
+          subject: `Support case #${caseNumber}`,
+          description: text || "New support case",
+          category: ticket.category || "support",
+          priority: ticket.priority || "normal",
+          status: "open",
+          source_channel: "in_app",
+          user_last_read_at: now,
+          last_message_at: now,
+          crm_metadata: {
+            source: "mobile_app",
+            channel: "in_app",
+            parentTicketId: ticket.id,
+          },
+        })
+        .select("id, user_id, status, subject, category, priority, conversation_id")
+        .single();
+
+      if (!nextTicketError && nextTicket?.id) {
+        ticket = nextTicket;
+        targetTicketId = nextTicket.id;
+      }
+    }
 
     const payload = {
-      ticket_id: ticketId,
+      ticket_id: targetTicketId,
       sender_id: session.user.id,
       message: text || "[attachment]",
       attachments,
@@ -71,6 +116,12 @@ export async function POST(request: NextRequest, { params }: Params) {
       attachment_mime_type: attachmentMimeType || null,
       attachment_size: attachmentSize || null,
       is_internal: isAdmin ? !!isInternal : false,
+      sender_type: isAdmin ? (isInternal ? "admin" : "support") : "user",
+      sender_label: isAdmin
+        ? `${session.user.firstName || "Support"} - Charter Keke support`
+        : session.user.firstName || "Customer",
+      department_key: isAdmin ? "support" : null,
+      metadata: { conversationId: ticket.conversation_id || null },
     };
 
     const { data: created, error: createError } = await supabaseAdmin
@@ -122,7 +173,13 @@ export async function POST(request: NextRequest, { params }: Params) {
       }
     }
 
-    await supabaseAdmin.from("support_tickets").update(ticketUpdate).eq("id", ticketId);
+    await supabaseAdmin.from("support_tickets").update(ticketUpdate).eq("id", targetTicketId);
+    if (ticket.conversation_id) {
+      await supabaseAdmin
+        .from("support_conversations")
+        .update({ status: "in_progress", last_message_at: now, updated_at: now })
+        .eq("id", ticket.conversation_id);
+    }
 
     if (!isAdmin) {
       await notifyAdmins({
@@ -131,15 +188,15 @@ export async function POST(request: NextRequest, { params }: Params) {
         title: "New support message",
         body: `${session.user.firstName || "A customer"} replied to a support ticket.`,
         type: "support_message",
-        actionUrl: `/admin/crm?ticket=${ticketId}`,
-        metadata: { ticketId, userId: session.user.id, messageId: created?.id },
-        sourceEventId: `support_message:${created?.id || ticketId}`,
+        actionUrl: `/admin/crm?ticket=${targetTicketId}`,
+        metadata: { ticketId: targetTicketId, conversationId: ticket.conversation_id, userId: session.user.id, messageId: created?.id },
+        sourceEventId: `support_message:${created?.id || targetTicketId}`,
       }).catch((error) => console.error("[SUPPORT][MESSAGES][ADMIN_NOTIFY]", error));
 
       const { data: recentMessages } = await supabaseAdmin
         .from("ticket_messages")
         .select("message, sender_id, users:sender_id(role)")
-        .eq("ticket_id", ticketId)
+        .eq("ticket_id", targetTicketId)
         .eq("is_internal", false)
         .order("created_at", { ascending: false })
         .limit(12);
@@ -172,11 +229,15 @@ export async function POST(request: NextRequest, { params }: Params) {
         const senderId = await getAutomationSenderId();
         if (senderId) {
           await supabaseAdmin.from("ticket_messages").insert({
-            ticket_id: ticketId,
+            ticket_id: targetTicketId,
             sender_id: senderId,
             message: ai.reply,
             message_type: "text",
             is_internal: false,
+            sender_type: "assistant",
+            sender_label: "Dapo - Charter Keke assistant",
+            department_key: ai.department || "support",
+            metadata: { conversationId: ticket.conversation_id || null, model: ai.model, category: ai.category },
           });
         }
       }
@@ -188,9 +249,9 @@ export async function POST(request: NextRequest, { params }: Params) {
           title: "AI escalated support reply",
           body: ai.reason || `${session.user.firstName || "A customer"} needs human support.`,
           type: "support_ai_escalation",
-          actionUrl: `/admin/crm?ticket=${ticketId}`,
-          metadata: { ticketId, userId: session.user.id, messageId: created?.id, category: ai.category, model: ai.model },
-          sourceEventId: `support_ai_escalation:${created?.id || ticketId}`,
+          actionUrl: `/admin/crm?ticket=${targetTicketId}`,
+          metadata: { ticketId: targetTicketId, conversationId: ticket.conversation_id, userId: session.user.id, messageId: created?.id, category: ai.category, model: ai.model },
+          sourceEventId: `support_ai_escalation:${created?.id || targetTicketId}`,
         }).catch((error) => console.error("[SUPPORT][MESSAGES][AI_ESCALATE]", error));
       }
 
@@ -205,7 +266,7 @@ export async function POST(request: NextRequest, { params }: Params) {
             resolution_note: ai.reason || "Dapo marked this case resolved after customer confirmation.",
             updated_at: resolvedAt,
           })
-          .eq("id", ticketId);
+          .eq("id", targetTicketId);
       }
     }
 

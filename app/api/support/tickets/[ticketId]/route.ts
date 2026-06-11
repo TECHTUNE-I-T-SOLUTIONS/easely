@@ -90,6 +90,10 @@ export async function GET(request: NextRequest, { params }: Params) {
           attachment_mime_type,
           attachment_size,
           is_internal,
+          sender_type,
+          sender_label,
+          department_key,
+          metadata,
           users:sender_id (
             id,
             first_name,
