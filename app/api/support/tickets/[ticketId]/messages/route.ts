@@ -184,7 +184,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       if (ai?.shouldEscalate) {
         await notifyAdmins({
           allAdmins: true,
-          department: "support",
+          department: ai.department || "support",
           title: "AI escalated support reply",
           body: ai.reason || `${session.user.firstName || "A customer"} needs human support.`,
           type: "support_ai_escalation",
@@ -192,6 +192,20 @@ export async function POST(request: NextRequest, { params }: Params) {
           metadata: { ticketId, userId: session.user.id, messageId: created?.id, category: ai.category, model: ai.model },
           sourceEventId: `support_ai_escalation:${created?.id || ticketId}`,
         }).catch((error) => console.error("[SUPPORT][MESSAGES][AI_ESCALATE]", error));
+      }
+
+      if (ai?.shouldResolve) {
+        const resolvedAt = new Date().toISOString();
+        await supabaseAdmin
+          .from("support_tickets")
+          .update({
+            status: "resolved",
+            resolved_at: resolvedAt,
+            resolution_requested_at: resolvedAt,
+            resolution_note: ai.reason || "Dapo marked this case resolved after customer confirmation.",
+            updated_at: resolvedAt,
+          })
+          .eq("id", ticketId);
       }
     }
 

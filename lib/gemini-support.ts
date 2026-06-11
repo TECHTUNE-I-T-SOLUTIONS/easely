@@ -17,12 +17,14 @@ type SupportAIResult = {
   model?: string
   reply?: string
   shouldEscalate: boolean
+  shouldResolve?: boolean
   confidence: number
   category?: string
+  department?: string
   reason?: string
 }
 
-const ORIKA_INTRO = "Hi, I'm Orika, your Charter Keke journey assistant."
+const DAPO_INTRO = "Hi, my name is Dapo, but you can also call me Daps. I'm your Charter Keke journey assistant."
 
 const VAGUE_SUPPORT_OPTIONS = [
   "Ride issues - booking, pickup, live tracking, cancellation, or trip status",
@@ -34,7 +36,7 @@ const VAGUE_SUPPORT_OPTIONS = [
 ]
 
 const CHARTER_KEKE_APP_KNOWLEDGE = `
-Charter Keke mobile app knowledge Orika can use:
+Charter Keke mobile app knowledge Dapo can use:
 
 Rider/passenger experience:
 - Signup/login: riders create an account, verify access with OTP/password flows, complete profile details, and can edit profile details/avatar later.
@@ -55,7 +57,7 @@ Driver experience:
 - Home: shows notification bell, online/offline status toggle, remittance lock warnings, earnings summary, active/completed ride stats, nearby map/ride activity, and floating support.
 - Verification: only verified/approved drivers should receive ride request SMS/push and accept rides.
 - Ride requests: verified online drivers can receive and accept available rides.
-- Ride lifecycle: accepted -> arrived/started/in_progress -> completed, with cancellation handling where allowed. If a status already changed, Orika should explain the app may need refresh rather than claiming failure.
+- Ride lifecycle: accepted -> arrived/started/in_progress -> completed, with cancellation handling where allowed. If a status already changed, Dapo should explain the app may need refresh rather than claiming failure.
 - Earnings: shows today earnings, completed trips, ride totals, and settlement/remittance information.
 - Wallet/remittance: drivers pay platform remittance/settlement owed to Charter Keke. Overdue remittance can lock ride acceptance until paid/verified.
 - Documents/vehicle/bank accounts: drivers manage credentials, vehicle info, documents, and settlement/payment account information.
@@ -65,8 +67,8 @@ Driver experience:
 Payment and policy facts:
 - Rider trip fare is paid directly to the driver in person. Charter Keke does not process rider card/wallet trip payments in-app.
 - Driver remittance/settlement is separate: drivers owe platform fees/remittance to Charter Keke.
-- Orika must not promise refunds, punishment, account approval, cancellation overrides, or database changes.
-- For safety, SOS, harassment, fraud, account access, refunds/remittance disputes, verification approval, or driver discipline, Orika should collect the key details and escalate to human CRM support.
+- Dapo must not promise refunds, punishment, account approval, cancellation overrides, or database changes.
+- For safety, SOS, harassment, fraud, account access, refunds/remittance disputes, verification approval, or driver discipline, Dapo should collect the key details and escalate to human CRM support.
 `
 
 const GEMINI_MODELS = [
@@ -98,11 +100,32 @@ function isVagueSupportMessage(message: string) {
   ].includes(compact)
 }
 
+function isNegativeClosure(message: string) {
+  const compact = message.trim().toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ")
+  return [
+    "no",
+    "nope",
+    "nothing else",
+    "no thanks",
+    "no thank you",
+    "all good",
+    "it works now",
+    "it works fine now",
+    "resolved",
+    "done",
+    "okay done",
+  ].includes(compact)
+}
+
+function hasDapoIntroduced(history?: SupportMessage[]) {
+  return (history || []).some((item) => item.role === "assistant" && /dapo|daps|journey assistant/i.test(item.content || ""))
+}
+
 function vagueSupportReply(customerName?: string | null) {
   const greeting = customerName ? `Hello ${customerName},` : "Hello,"
   return `${greeting}
 
-${ORIKA_INTRO}
+${DAPO_INTRO}
 
 How can I help today? Reply with the number that best matches your issue:
 
@@ -123,8 +146,8 @@ function supportPrompt(input: SupportAIInput) {
     .join("\n")
 
   return `
-You are Orika, Charter Keke's professional customer support assistant.
-Orika means "Journey Guide". Introduce yourself naturally as: "Hi, I'm Orika, your Charter Keke journey assistant."
+You are Dapo, Charter Keke's professional customer support assistant. Customers can also call you Daps.
+If you have not introduced yourself in this conversation, introduce yourself once as: "${DAPO_INTRO}" Do not repeat the introduction after that.
 
 Business facts:
 - Charter Keke connects riders/passengers with keke drivers.
@@ -133,6 +156,9 @@ Business facts:
 - If the customer message is vague, a greeting, or lacks enough detail, give a short numbered option menu for ride issues, payment issues, driver complaints, account issues, safety/emergency, and other.
 - Ask one focused follow-up question when details are missing after the customer chooses a category.
 - If the issue needs a human admin, safety review, account action, refund/remittance investigation, driver discipline, legal/privacy handling, or database changes, say a support agent will follow up and set shouldEscalate true.
+- Department routing: payment/refund/remittance -> billing; app crash, login reset, OTP, bug, technical issue -> engineering; driver misconduct/safety/SOS/harassment -> safety; verification/account access/profile -> support; ride matching/status/cancellation -> operations.
+- Super admins and support always remain notified. Other departments should only add internal notes; support replies to customers.
+- If you previously asked whether anything else is needed and the customer clearly answers no/nothing else/all good/resolved, set shouldResolve true and reply briefly that the case can be marked resolved.
 - Do not invent ride, payment, account, or driver details.
 - Never promise refunds or enforcement outcomes.
 - Do not answer outside Charter Keke customer support. If asked unrelated questions, politely redirect to Charter Keke support matters.
@@ -143,8 +169,10 @@ Return only JSON with:
 {
   "reply": "customer-facing reply",
   "shouldEscalate": boolean,
+  "shouldResolve": boolean,
   "confidence": number between 0 and 1,
   "category": "ride_issue|payment_issue|driver_complaint|account_issue|safety|technical|other",
+  "department": "support|billing|engineering|safety|operations|general",
   "reason": "short internal reason"
 }
 
@@ -167,15 +195,35 @@ function parseJson(text: string): any {
 }
 
 export async function generateSupportAIReply(input: SupportAIInput): Promise<SupportAIResult> {
-  if (isVagueSupportMessage(input.latestMessage)) {
+  if (isNegativeClosure(input.latestMessage)) {
     return {
       ok: true,
-      model: "orika-template",
-      reply: vagueSupportReply(input.customerName),
+      model: "dapo-template",
+      reply: "Thank you for letting me know. I am glad we could resolve that for you. I will mark this support case as resolved now. Have a safe journey with Charter Keke.",
       shouldEscalate: false,
+      shouldResolve: true,
       confidence: 1,
       category: "other",
-      reason: "Vague support greeting handled with Orika option menu",
+      department: "support",
+      reason: "Customer confirmed no further help is needed",
+    }
+  }
+
+  if (isVagueSupportMessage(input.latestMessage)) {
+    const reply = hasDapoIntroduced(input.history)
+      ? vagueSupportReply(input.customerName).replace(`\n\n${DAPO_INTRO}`, "")
+      : vagueSupportReply(input.customerName)
+
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply,
+      shouldEscalate: false,
+      shouldResolve: false,
+      confidence: 1,
+      category: "other",
+      department: "support",
+      reason: "Vague support greeting handled with Dapo option menu",
     }
   }
 
@@ -230,8 +278,10 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
         model,
         reply,
         shouldEscalate: parsed.shouldEscalate !== false,
+        shouldResolve: parsed.shouldResolve === true,
         confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.5))),
         category: String(parsed.category || "other"),
+        department: String(parsed.department || "support"),
         reason: String(parsed.reason || "AI support response"),
       }
     } catch (error) {

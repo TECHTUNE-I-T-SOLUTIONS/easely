@@ -103,7 +103,7 @@ function renderSupportReplyEmail({
         <tr><td align="center">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#fff;border:1px solid #f0dec8;border-radius:22px;overflow:hidden">
             <tr><td style="background:#111;padding:24px 28px;color:#fff">
-              <div style="font-size:12px;font-weight:900;letter-spacing:.18em;text-transform:uppercase;color:#ff8a00">Orika - Charter Keke Support</div>
+              <div style="font-size:12px;font-weight:900;letter-spacing:.18em;text-transform:uppercase;color:#ff8a00">Dapo-Charter Keke</div>
               <div style="font-size:26px;line-height:1.25;font-weight:900;margin-top:6px">Your journey assistant replied</div>
             </td></tr>
             <tr><td style="padding:30px 28px">
@@ -114,7 +114,7 @@ function renderSupportReplyEmail({
                 <div style="font-size:20px;font-weight:900;color:#171717;margin-top:6px">${safeTicket}</div>
                 <div style="font-size:14px;color:#555;margin-top:8px">${safeSubject}</div>
               </div>
-              <p style="margin:0;font-size:14px;line-height:1.6;color:#6b7280">Reply to this email with any extra details. If your issue needs a human support agent, Orika will route it to the right Charter Keke team.</p>
+              <p style="margin:0;font-size:14px;line-height:1.6;color:#6b7280">Reply to this email with any extra details. If your issue needs a human support agent, Dapo will route it to the right Charter Keke team.</p>
             </td></tr>
             <tr><td style="background:#ff8a00;padding:16px 28px;color:#111;font-size:13px;font-weight:700">Charter Keke - Affordable Keke rides in Lagos</td></tr>
           </table>
@@ -427,7 +427,7 @@ async function persistInboundMessage(message: ParsedMessage) {
         ticket_id: ticketId,
         direction: "outbound",
         from_email: env("CRM_EMAIL_AUTOREPLY_FROM", recipientEmail),
-        from_name: "Orika",
+        from_name: "Dapo-Charter Keke",
         to_emails: [message.fromEmail],
         cc_emails: [],
         bcc_emails: [],
@@ -441,7 +441,7 @@ async function persistInboundMessage(message: ParsedMessage) {
         processing_reason: "Queued acknowledgment for SMTP delivery",
         raw_headers: {},
         raw_payload: {
-          automation: "orika",
+          automation: "dapo",
           model: ai?.model || null,
           shouldEscalate: ai?.shouldEscalate || false,
           category: ai?.category || null,
@@ -455,8 +455,8 @@ async function persistInboundMessage(message: ParsedMessage) {
     await notifyAdmins({
       allAdmins: true,
       department: departmentKey,
-      title: "Orika routed email support to CRM",
-      body: ai.reason || `Orika replied to ${message.fromName || message.fromEmail} and needs a human support agent to continue.`,
+      title: "Dapo routed email support to CRM",
+      body: ai.reason || `Dapo replied to ${message.fromName || message.fromEmail} and needs a human support agent to continue.`,
       type: "support_ai_escalation",
       actionUrl: `/admin/crm?ticket=${ticketId}`,
       metadata: { ticketId, fromEmail: message.fromEmail, category: ai.category, model: ai.model },
