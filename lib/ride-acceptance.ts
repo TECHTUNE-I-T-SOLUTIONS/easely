@@ -3,6 +3,7 @@ import { emitRideAccepted, emitRideTaken } from "@/lib/push-emitters"
 import { sendRideAcceptanceSMS } from "@/lib/termii"
 import { cancelExpiredOpenRides } from "@/lib/ride-expiry"
 import { sendRideReceiptEmail } from "@/lib/ride-receipt-email"
+import { requireVerifiedDriver } from "@/lib/driver-verification"
 
 export type RideAcceptanceSource = "app" | "sms"
 
@@ -15,7 +16,7 @@ interface AcceptRideInput {
 interface AcceptRideResult {
   success: boolean
   status: number
-  code: "accepted" | "ride_not_found" | "driver_not_found" | "ride_unavailable" | "ride_expired" | "internal_error"
+  code: "accepted" | "ride_not_found" | "driver_not_found" | "driver_not_verified" | "ride_unavailable" | "ride_expired" | "internal_error"
   message: string
   ride?: any
 }
@@ -33,7 +34,16 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
       }
     }
 
-    // Get driver profile
+    const verification = await requireVerifiedDriver(input.driverUserId)
+    if (!verification.allowed) {
+      return {
+        success: false,
+        status: verification.status,
+        code: verification.code || "internal_error",
+        message: verification.message || "Driver is not eligible to accept rides",
+      }
+    }
+
     const { data: driver, error: driverError } = await supabaseAdmin
       .from("drivers")
       .select("id, user_id, vehicle_type, plate_number")
@@ -42,12 +52,7 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
 
     if (driverError || !driver) {
       console.error("[RideAcceptance] Driver not found:", driverError)
-      return {
-        success: false,
-        status: 404,
-        code: "driver_not_found",
-        message: "Driver profile not found",
-      }
+      return { success: false, status: 404, code: "driver_not_found", message: "Driver profile not found" }
     }
 
     console.log("[RideAcceptance] Driver found:", driver.id)

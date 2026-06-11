@@ -7,6 +7,7 @@ import {
   updateOverdueSettlements,
   getDriverRemittanceSummary,
 } from "@/lib/driver-settlement"
+import { requireVerifiedDriver } from "@/lib/driver-verification"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || "",
@@ -21,7 +22,7 @@ function isMissingManualOffColumn(error: any) {
 async function getDriverForUser(userId: string) {
   const withManualOff = await supabase
     .from("drivers")
-    .select("id, availability_status, updated_at, manual_availability_off")
+    .select("id, verified, availability_status, updated_at, manual_availability_off")
     .eq("user_id", userId)
     .single()
 
@@ -31,7 +32,7 @@ async function getDriverForUser(userId: string) {
 
   const fallback = await supabase
     .from("drivers")
-    .select("id, availability_status, updated_at")
+    .select("id, verified, availability_status, updated_at")
     .eq("user_id", userId)
     .single()
 
@@ -90,6 +91,22 @@ export async function GET(request: NextRequest) {
         { error: "Driver not found" },
         { status: 404 }
       )
+    }
+
+    if (!driver.verified) {
+      if (driver.availability_status !== "offline") {
+        await updateDriverAvailability(session.user.id, "offline").catch(() => undefined)
+      }
+      return NextResponse.json({
+        status: "offline",
+        updatedAt: driver.updated_at,
+        driverId: driver.id,
+        blocked: true,
+        code: "driver_not_verified",
+        verificationStatus: "pending",
+        message: "Your driver account is awaiting Charter Keke verification.",
+        manualAvailabilityOff: true,
+      })
     }
 
     // Auto-verify any pending payments before checking settlement status
@@ -242,18 +259,15 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    const { data: driverRecord } = await supabase
-      .from("drivers")
-      .select("id")
-      .eq("user_id", session.user.id)
-      .single()
-
-    if (!driverRecord?.id) {
+    const verification = await requireVerifiedDriver(session.user.id)
+    if (!verification.allowed) {
       return NextResponse.json(
-        { error: "Driver not found" },
-        { status: 404 }
+        { error: verification.message, code: verification.code, driver: verification.driver },
+        { status: verification.status }
       )
     }
+
+    const driverRecord = verification.driver
 
     if (status === "online") {
       const remittance = await getDriverRemittanceSummary(driverRecord.id)

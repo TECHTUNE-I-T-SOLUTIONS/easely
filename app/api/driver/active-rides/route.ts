@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabase } from "@/lib/supabase"
 import { getSessionFromRequest } from "@/lib/auth"
+import { requireVerifiedDriver } from "@/lib/driver-verification"
 
 export async function GET(request: NextRequest) {
   try {
@@ -8,6 +9,14 @@ export async function GET(request: NextRequest) {
 
     if (!session?.user?.id || session.user.role !== "driver") {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    const verification = await requireVerifiedDriver(session.user.id)
+    if (!verification.allowed) {
+      return NextResponse.json(
+        { error: verification.message, code: verification.code, driver: verification.driver },
+        { status: verification.status }
+      )
     }
 
     // Get driver ID from users table

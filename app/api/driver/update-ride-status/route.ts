@@ -5,6 +5,7 @@ import { notifyAdmins } from "@/lib/admin-notifications"
 import { emitDriverArrived, emitRideCompleted, emitRideUpdate } from "@/lib/push-emitters"
 import { sendPushNotification } from "@/lib/push-service"
 import { cancelExpiredOpenRides, isRideExpired } from "@/lib/ride-expiry"
+import { requireVerifiedDriver } from "@/lib/driver-verification"
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,6 +29,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Invalid status" },
         { status: 400 }
+      )
+    }
+
+    const verification = await requireVerifiedDriver(session.user.id)
+    if (!verification.allowed) {
+      return NextResponse.json(
+        { error: verification.message, code: verification.code, driver: verification.driver },
+        { status: verification.status }
       )
     }
 

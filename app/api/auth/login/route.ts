@@ -187,26 +187,34 @@ export async function POST(request: NextRequest) {
     // Build role-specific user object
     let userData;
     if (user.role === 'driver') {
+      const { data: driverProfile } = await supabaseAdmin
+        .from("drivers")
+        .select("id, verified, vehicle_type, plate_number, operating_zones, average_rating, total_rides_completed, total_earnings, bank_name, bank_account_number, account_name")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
       userData = {
         ...baseUserData,
         role: 'driver' as const,
+        driverId: driverProfile?.id || '',
         licenseNumber: user.license_number || '',
         licenseExpiry: user.license_expiry || '',
-        vehicleType: user.vehicle_type || 'keke',
+        vehicleType: driverProfile?.vehicle_type || user.vehicle_type || 'keke',
         vehicleMake: user.vehicle_make || '',
         vehicleModel: user.vehicle_model || '',
         vehicleColor: user.vehicle_color || '',
-        vehicleRegistration: user.vehicle_registration || '',
-        operatingZones: user.operating_zones || [],
-        isVerified: user.is_verified || false,
-        isActive: user.is_active || false,
-        totalRides: user.total_rides || 0,
-        averageRating: user.average_rating || 0,
+        vehicleRegistration: driverProfile?.plate_number || user.vehicle_registration || '',
+        operatingZones: driverProfile?.operating_zones || user.operating_zones || [],
+        isVerified: Boolean(driverProfile?.verified),
+        verificationStatus: driverProfile?.verified ? "verified" : "pending",
+        isActive: Boolean(driverProfile?.verified),
+        totalRides: driverProfile?.total_rides_completed || user.total_rides || 0,
+        averageRating: driverProfile?.average_rating || user.average_rating || 0,
         walletBalance: user.wallet_balance || 0,
-        bankAccount: user.bank_name ? {
-          bankName: user.bank_name,
-          accountNumber: user.bank_account_number || '',
-          accountHolder: user.bank_account_holder || '',
+        bankAccount: driverProfile?.bank_name || user.bank_name ? {
+          bankName: driverProfile?.bank_name || user.bank_name,
+          accountNumber: driverProfile?.bank_account_number || user.bank_account_number || '',
+          accountHolder: driverProfile?.account_name || user.bank_account_holder || '',
         } : undefined,
       };
     } else {

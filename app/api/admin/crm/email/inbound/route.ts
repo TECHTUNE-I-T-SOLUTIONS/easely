@@ -7,6 +7,7 @@ import {
   normalizeEmailAddress,
   resolveDepartmentKeyFromText,
 } from "@/lib/crm"
+import { processOutboundQueue } from "@/lib/crm-email-service"
 
 function normalizeAttachments(input: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(input)) return []
@@ -190,24 +191,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: emailMessageError.message }, { status: 400 })
     }
 
-    const { data: messageRecord, error: messageError } = await supabaseAdmin
-      .from("ticket_messages")
-      .insert({
-        ticket_id: ticketId,
-        sender_id: contactUserId,
-        message: textBody || htmlBody || subject || "Incoming email",
-        attachments,
-        message_type: attachments.length ? "image" : "text",
-        is_internal: false,
-        updated_at: receivedAt,
-      })
-      .select("*")
-      .single()
-
-    if (messageError) {
-      return NextResponse.json({ error: messageError.message }, { status: 400 })
-    }
-
     await supabaseAdmin
       .from("support_tickets")
       .update({
@@ -242,13 +225,17 @@ export async function POST(request: NextRequest) {
       })
       .select("id")
 
+    if (outboundAck?.length) {
+      processOutboundQueue(10).catch((error) => console.error("[CRM][EMAIL][INBOUND][OUTBOUND_QUEUE]", error))
+    }
+
     return NextResponse.json(
       {
         success: true,
         ticketId,
         ticket: ticketRecord,
         emailMessage,
-        messageRecord,
+        messageRecord: null,
         outboundAck,
         departmentKey,
         emailAlias: recipientEmail,

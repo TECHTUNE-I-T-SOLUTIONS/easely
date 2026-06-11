@@ -1,5 +1,6 @@
 import webpush from 'web-push';
 import { supabaseAdmin } from './supabase';
+import { activeUserIds } from './contact-hygiene';
 
 // Configure web-push with VAPID keys on server startup
 export const initializePushNotifications = () => {
@@ -221,11 +222,18 @@ export const sendPushNotification = async (
       return userIds.map(userId => ({ userId, success: false, error: 'Supabase not initialized' }));
     }
 
+    const eligibleUserIds = await activeUserIds(userIds);
+    const skippedDeleted = userIds.filter((userId) => !eligibleUserIds.includes(userId));
+    for (const userId of skippedDeleted) {
+      results.push({ userId, success: false, error: 'User is deleted or not contactable' });
+    }
+    if (!eligibleUserIds.length) return results;
+
     // Fetch active non-placeholder subscriptions directly from the database
     const { data: subscriptionsData, error } = await supabaseAdmin
       .from('push_subscriptions')
       .select('*')
-      .in('user_id', userIds)
+      .in('user_id', eligibleUserIds)
       .eq('is_active', true)
       .not('push_token', 'is', null);
 
@@ -243,7 +251,7 @@ export const sendPushNotification = async (
       subsByUserId.get(sub.user_id)!.push(sub);
     }
 
-    for (const userId of userIds) {
+    for (const userId of eligibleUserIds) {
       const subscriptions = subsByUserId.get(userId) || [];
 
       // Also check memory cache just in case we have fresh subscriptions not yet flushed, though DB should be source of truth

@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer"
+import { isDeletedPlaceholderEmail } from "@/lib/contact-hygiene"
 import sharp from "sharp"
 
 function env(name: string, fallback = "") {
@@ -266,7 +267,7 @@ export async function sendRideReceiptEmail({
   ride: any
   audience: "rider" | "driver"
 }) {
-  if (!to || (!env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD"))) return
+  if (!to || isDeletedPlaceholderEmail(to) || (!env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD"))) return
 
   const pdf = await renderRideReceiptPdfBuffer(ride, audience)
   const png = await renderRideReceiptPngBuffer(ride, audience)

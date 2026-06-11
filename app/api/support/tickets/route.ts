@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
 import { notifyAdmins } from "@/lib/admin-notifications";
+import { generateSupportAIReply } from "@/lib/gemini-support";
 import { supabaseAdmin } from "@/lib/supabase";
 
 async function getAdminIdForUser(userId: string): Promise<string | null> {
@@ -11,6 +12,17 @@ async function getAdminIdForUser(userId: string): Promise<string | null> {
     .eq("user_id", userId)
     .single();
   return data?.id || null;
+}
+
+async function getAutomationSenderId(): Promise<string | null> {
+  if (!supabaseAdmin) return null;
+  const { data } = await supabaseAdmin
+    .from("admins")
+    .select("user_id")
+    .or("department.eq.support,admin_level.eq.super,admin_level.eq.super_admin,admin_level.eq.super-admin")
+    .limit(1)
+    .maybeSingle();
+  return data?.user_id || null;
 }
 
 export async function GET(request: NextRequest) {
@@ -144,10 +156,15 @@ export async function POST(request: NextRequest) {
         category,
         priority,
         status: "open",
+        source_channel: "in_app",
         related_ride_id: relatedRideId || null,
         user_last_read_at: now,
         admin_last_read_at: null,
         last_message_at: now,
+        crm_metadata: {
+          source: "mobile_app",
+          channel: "in_app",
+        },
       })
       .select("*")
       .single();
@@ -181,6 +198,45 @@ export async function POST(request: NextRequest) {
       metadata: { ticketId: ticket.id, userId: session.user.id, category, priority },
       sourceEventId: `support_ticket_created:${ticket.id}`,
     }).catch((error) => console.error("[SUPPORT][TICKETS][ADMIN_NOTIFY]", error));
+
+    if (firstMessageText) {
+      const ai = await generateSupportAIReply({
+        channel: "in_app",
+        subject,
+        customerName: session.user.firstName,
+        latestMessage: firstMessageText,
+        history: [{ role: "customer", content: firstMessageText }],
+      }).catch((error) => {
+        console.error("[SUPPORT][TICKETS][AI]", error);
+        return null;
+      });
+
+      if (ai?.ok && ai.reply) {
+        const senderId = await getAutomationSenderId();
+        if (senderId) {
+          await supabaseAdmin.from("ticket_messages").insert({
+            ticket_id: ticket.id,
+            sender_id: senderId,
+            message: ai.reply,
+            message_type: "text",
+            is_internal: false,
+          });
+        }
+      }
+
+      if (ai?.shouldEscalate) {
+        await notifyAdmins({
+          allAdmins: true,
+          department: "support",
+          title: "AI escalated support ticket",
+          body: ai.reason || `${session.user.firstName || "A customer"} needs human support.`,
+          type: "support_ai_escalation",
+          actionUrl: `/admin/crm?ticket=${ticket.id}`,
+          metadata: { ticketId: ticket.id, userId: session.user.id, category: ai.category, model: ai.model },
+          sourceEventId: `support_ai_escalation:${ticket.id}:${ai.category || "other"}`,
+        }).catch((error) => console.error("[SUPPORT][TICKETS][AI_ESCALATE]", error));
+      }
+    }
 
     return NextResponse.json({ ticket }, { status: 201 });
   } catch (error) {

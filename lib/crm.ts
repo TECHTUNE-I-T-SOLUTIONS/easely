@@ -65,15 +65,15 @@ export const CRM_DEPARTMENTS: CrmDepartment[] = [
     key: "technical",
     label: "Technical Support",
     emailAlias: "tech@charterkeke.com",
-    keywords: ["bug", "error", "crash", "api", "technical"],
-    aliases: ["tech", "technical"],
+    keywords: ["bug", "error", "crash", "api", "technical", "app issue", "website issue"],
+    aliases: ["tech", "technical", "technical-support"],
   },
   {
     key: "engineering",
     label: "Engineering",
     emailAlias: "engineering@charterkeke.com",
-    keywords: ["engineering", "integration", "release", "deployment"],
-    aliases: ["engineering", "dev"],
+    keywords: ["engineering", "integration", "release", "deployment", "feature", "tour", "ui", "ux", "app"],
+    aliases: ["engineering", "engineer", "dev", "developer", "developers"],
   },
   {
     key: "product",
@@ -118,8 +118,13 @@ export function extractEmailAddresses(raw?: string | null): string[] {
 export function extractRecipientFromHeaders(headers?: Record<string, string | null | undefined>): string | null {
   if (!headers) return null
 
+  const normalizedHeaders = Object.entries(headers).reduce<Record<string, string | null | undefined>>((acc, [key, value]) => {
+    acc[key.toLowerCase()] = value
+    return acc
+  }, {})
+
   for (const headerKey of CRM_EMAIL_HEADER_KEYS) {
-    const rawValue = headers[headerKey] || headers[headerKey.toUpperCase()]
+    const rawValue = normalizedHeaders[headerKey]
     const addresses = extractEmailAddresses(rawValue)
     if (addresses.length) {
       return addresses[0]
@@ -179,7 +184,17 @@ export function resolveDepartmentKeyFromText(input: {
     if (department.key === "technical" && (text.includes("bug") || text.includes("crash") || text.includes("error") || text.includes("api"))) {
       return department.key
     }
-    if (department.key === "engineering" && (text.includes("integration") || text.includes("deployment") || text.includes("release"))) {
+    if (
+      department.key === "engineering" &&
+      (text.includes("integration") ||
+        text.includes("deployment") ||
+        text.includes("release") ||
+        text.includes("feature") ||
+        text.includes("tour") ||
+        text.includes("ui") ||
+        text.includes("ux") ||
+        text.includes("app"))
+    ) {
       return department.key
     }
     if (department.key === "finance" && (text.includes("settlement") || text.includes("remittance") || text.includes("reconciliation"))) {
@@ -191,5 +206,16 @@ export function resolveDepartmentKeyFromText(input: {
 }
 
 export function departmentEmailAliases(): string[] {
-  return CRM_DEPARTMENTS.map((department) => department.emailAlias)
+  const envAliases = [
+    process.env.CRM_EMAIL_ALIASES,
+    process.env.CRM_DEPARTMENT_EMAIL_ALIASES,
+    process.env.CRM_SUPPORT_EMAIL_ALIASES,
+    process.env.CRM_PRIMARY_SUPPORT_INBOX,
+  ]
+    .join(",")
+    .split(/[,\s;]+/)
+    .map((value) => normalizeEmailAddress(value))
+    .filter(Boolean)
+
+  return Array.from(new Set([...CRM_DEPARTMENTS.map((department) => department.emailAlias), ...envAliases]))
 }

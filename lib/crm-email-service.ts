@@ -2,7 +2,9 @@ import { ImapFlow } from "imapflow"
 import nodemailer from "nodemailer"
 import { simpleParser } from "mailparser"
 import { supabaseAdmin } from "@/lib/supabase"
-import { extractRecipientFromHeaders, normalizeEmailAddress, resolveDepartmentKeyFromText } from "@/lib/crm"
+import { departmentEmailAliases, extractRecipientFromHeaders, normalizeEmailAddress, resolveDepartmentKeyFromText } from "@/lib/crm"
+import { notifyAdmins } from "@/lib/admin-notifications"
+import { generateSupportAIReply } from "@/lib/gemini-support"
 
 type ParsedMessage = {
   messageId: string | null
@@ -312,22 +314,23 @@ async function persistInboundMessage(message: ParsedMessage) {
     throw emailInsertError
   }
 
-  const { error: messageInsertError } = await supabaseAdmin
-    .from("ticket_messages")
-    .insert({
-      ticket_id: ticketId,
-      sender_id: contactUserId,
-      message: message.bodyText || message.bodyHtml || message.subject,
-      attachments: message.attachments,
-      message_type: message.attachments.length ? "image" : "text",
-      is_internal: false,
-    })
-
-  if (messageInsertError) {
-    throw messageInsertError
-  }
+  const ai = await generateSupportAIReply({
+    channel: "email",
+    subject: message.subject,
+    customerName: message.fromName,
+    customerEmail: message.fromEmail,
+    latestMessage: message.bodyText || message.bodyHtml || message.subject,
+    history: [{ role: "customer", content: message.bodyText || message.bodyHtml || message.subject }],
+  }).catch((error) => {
+    console.error("[CRM][EMAIL][AI]", error)
+    return null
+  })
 
   if (boolEnv("CRM_EMAIL_AUTOREPLY_ENABLED", true)) {
+    const aiReply = ai?.ok && ai.reply
+      ? ai.reply
+      : `Hello ${message.fromName || "there"}, your message has been received and assigned ticket ${ticketId}. A customer support agent will review it and get in touch if more action is needed.`
+
     await supabaseAdmin
       .from("crm_email_messages")
       .insert({
@@ -339,8 +342,8 @@ async function persistInboundMessage(message: ParsedMessage) {
         to_emails: [message.fromEmail],
         cc_emails: [],
         bcc_emails: [],
-        subject: `Ticket Received - ${ticketId}`,
-        body_text: `Hello ${message.fromName || "there"}, your message has been received and assigned ticket ${ticketId}.`,
+        subject: ai?.ok && ai.reply ? `Re: ${message.subject}` : `Ticket Received - ${ticketId}`,
+        body_text: aiReply,
         body_html: null,
         attachments: [],
         external_message_id: null,
@@ -352,6 +355,19 @@ async function persistInboundMessage(message: ParsedMessage) {
         received_at: new Date().toISOString(),
         processed_at: null,
       })
+  }
+
+  if (ai?.shouldEscalate) {
+    await notifyAdmins({
+      allAdmins: true,
+      department: departmentKey,
+      title: "AI escalated email support",
+      body: ai.reason || `${message.fromName || message.fromEmail} needs human support.`,
+      type: "support_ai_escalation",
+      actionUrl: `/admin/crm?ticket=${ticketId}`,
+      metadata: { ticketId, fromEmail: message.fromEmail, category: ai.category, model: ai.model },
+      sourceEventId: `email_ai_escalation:${ticketId}:${message.messageId || message.receivedAt}`,
+    }).catch((error) => console.error("[CRM][EMAIL][AI_ESCALATE]", error))
   }
 
   await supabaseAdmin
@@ -377,6 +393,14 @@ async function persistInboundMessage(message: ParsedMessage) {
 export async function syncInboxNow(limit = 20) {
   if (!supabaseAdmin) {
     throw new Error("Supabase admin client unavailable")
+  }
+
+  for (const alias of departmentEmailAliases()) {
+    const departmentKey = resolveDepartmentKeyFromText({ recipientEmail: alias })
+    const departmentId = await resolveDepartmentId(departmentKey)
+    await upsertEmailAccount(alias, departmentId).catch((error) => {
+      console.warn("[CRM_EMAIL] Failed to upsert alias account", alias, error)
+    })
   }
 
   const passwords = imapPasswords()
