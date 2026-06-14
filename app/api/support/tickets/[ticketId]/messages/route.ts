@@ -164,9 +164,11 @@ export async function POST(request: NextRequest, { params }: Params) {
       if (ticket.status === "open") ticketUpdate.status = "in_progress";
     } else {
       ticketUpdate.user_last_read_at = now;
-      if (ticket.status === "resolved" || ticket.status === "closed") {
+      if (reopenedSameTicket || ticket.status === "resolved" || ticket.status === "closed") {
         ticketUpdate.status = "in_progress";
         ticketUpdate.resolution_confirmed_at = null;
+        ticketUpdate.resolved_at = null;
+        ticketUpdate.resolution_requested_at = null;
         ticketUpdate.closed_by_user = false;
       }
     }
