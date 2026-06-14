@@ -82,9 +82,12 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     const body = await request.json()
     const status = body?.status as string | undefined
     const cancellationReason = body?.cancellationReason as string | undefined
+    const etaMinutes = Number.isFinite(Number(body?.eta_minutes)) && Number(body?.eta_minutes) > 0
+      ? Math.round(Number(body.eta_minutes))
+      : null
 
-    if (!status) {
-      return NextResponse.json({ error: "Status is required" }, { status: 400 })
+    if (!status && !etaMinutes) {
+      return NextResponse.json({ error: "Status or eta_minutes is required" }, { status: 400 })
     }
 
     const { data: existingRide, error: fetchError } = await supabaseAdmin!
@@ -95,6 +98,45 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 
     if (fetchError || !existingRide) {
       return NextResponse.json({ error: "Ride not found" }, { status: 404 })
+    }
+
+    const { data: driverProfile } = await supabaseAdmin!
+      .from("drivers")
+      .select("id")
+      .eq("user_id", session.user.id)
+      .single()
+
+    const isAssignedDriver = Boolean(driverProfile?.id && existingRide.assigned_driver_id === driverProfile.id)
+    const isAdmin = session.user.role === "admin" || session.user.role === "super_admin"
+    const canEditEta = isAssignedDriver || isAdmin
+
+    if (etaMinutes !== null) {
+      if (!canEditEta) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      }
+
+      const { data: updatedEtaRide, error: etaUpdateError } = await supabaseAdmin!
+        .from("rides")
+        .update({
+          eta_minutes: etaMinutes,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", rideId)
+        .select("*")
+        .single()
+
+      if (etaUpdateError) {
+        console.error("[Rides/:id][PUT] eta update error:", etaUpdateError)
+        return NextResponse.json({ error: "Failed to update ETA" }, { status: 500 })
+      }
+
+      if (!status) {
+        return NextResponse.json({
+          success: true,
+          ride: updatedEtaRide,
+          eta_minutes: updatedEtaRide.eta_minutes ?? etaMinutes,
+        })
+      }
     }
 
     if (status === "cancelled") {
@@ -165,6 +207,10 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       }).catch((notifyError) => console.error("[Rides/:id][PUT] Admin notification failed:", notifyError))
 
       return NextResponse.json({ success: true, ride: updatedRide })
+    }
+
+    if (status && !["cancelled"].includes(status)) {
+      return NextResponse.json({ error: "Unsupported status update" }, { status: 400 })
     }
 
     return NextResponse.json({ error: "Unsupported status update" }, { status: 400 })

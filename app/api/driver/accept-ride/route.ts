@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { rideId } = body;
+    const { rideId, eta_minutes } = body;
 
     if (!rideId) {
       return NextResponse.json(
@@ -134,9 +134,34 @@ export async function POST(request: NextRequest) {
       console.error("[AcceptRide] Admin notification failed:", notifyError);
     }
 
+    const etaMinutes = Number.isFinite(Number(eta_minutes)) && Number(eta_minutes) > 0
+      ? Math.round(Number(eta_minutes))
+      : null;
+
+    let rideResponse = acceptance.ride;
+
+    if (etaMinutes && rideResponse?.id) {
+      const { data: etaRide, error: etaUpdateError } = await supabaseAdmin!
+        .from("rides")
+        .update({
+          eta_minutes: etaMinutes,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", rideResponse.id)
+        .select("*")
+        .single();
+
+      if (!etaUpdateError && etaRide) {
+        rideResponse = etaRide;
+      } else if (etaUpdateError) {
+        console.error("[AcceptRide] Failed to persist eta_minutes:", etaUpdateError);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      ride: acceptance.ride,
+      ride: rideResponse,
+      eta_minutes: rideResponse?.eta_minutes ?? etaMinutes ?? null,
     });
   } catch (error) {
     console.error("API error:", error);

@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { rideId, status } = body
+    const { rideId, status, eta_minutes } = body
 
     if (!rideId || !status) {
       return NextResponse.json(
@@ -31,6 +31,10 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    const parsedEtaMinutes = Number.isFinite(Number(eta_minutes)) && Number(eta_minutes) > 0
+      ? Math.round(Number(eta_minutes))
+      : null
 
     const verification = await requireVerifiedDriver(session.user.id)
     if (!verification.allowed) {
@@ -150,6 +154,10 @@ export async function POST(request: NextRequest) {
     const updateData: any = { 
       status,
       updated_at: new Date().toISOString(),
+    }
+
+    if (parsedEtaMinutes && status !== "completed") {
+      updateData.eta_minutes = parsedEtaMinutes
     }
     
     if (status === "in_progress") {
@@ -313,6 +321,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       ride: updatedRide,
+      eta_minutes: updatedRide.eta_minutes ?? parsedEtaMinutes ?? null,
     })
   } catch (error) {
     console.error("Update ride status error:", error)
