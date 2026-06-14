@@ -159,6 +159,13 @@ Business facts:
 - Department routing: payment/refund/remittance -> billing; app crash, login reset, OTP, bug, technical issue -> engineering; driver misconduct/safety/SOS/harassment -> safety; verification/account access/profile -> support; ride matching/status/cancellation -> operations.
 - Super admins and support always remain notified. Other departments should only add internal notes; support replies to customers.
 - If you previously asked whether anything else is needed and the customer clearly answers no/nothing else/all good/resolved, set shouldResolve true and reply briefly that the case can be marked resolved.
+- If the customer issue is tied to a specific trip, ask for the ride reference/ride ID first when possible, along with the date and any amount/fare details. For fare discrepancy or overcharge reports, ask for:
+  - ride reference or ride ID
+  - trip date
+  - pickup and destination
+  - fare shown in the app
+  - amount charged by the driver
+- If the user does not know the ride ID, ask for the date and route so support can search the trip, then continue with the other missing details.
 - Do not invent ride, payment, account, or driver details.
 - Never promise refunds or enforcement outcomes.
 - Do not answer outside Charter Keke customer support. If asked unrelated questions, politely redirect to Charter Keke support matters.
@@ -224,6 +231,39 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
       category: "other",
       department: "support",
       reason: "Vague support greeting handled with Dapo option menu",
+    }
+  }
+
+  const normalizedLatest = input.latestMessage.toLowerCase()
+  const tripSpecificKeywords = [
+    "ride",
+    "trip",
+    "fare",
+    "overcharge",
+    "charged",
+    "charge",
+    "pickup",
+    "dropoff",
+    "destination",
+    "route",
+    "driver",
+  ]
+  const mentionsTrip = tripSpecificKeywords.some((keyword) => normalizedLatest.includes(keyword))
+  const mentionsTripId = /\b(ride|trip)\s*(id|reference|ref)\b/i.test(input.latestMessage)
+  const isPaymentDispute = /\b(fare|overcharge|charged|charge|discrepancy|amount)\b/i.test(input.latestMessage)
+
+  if ((mentionsTrip || isPaymentDispute) && !mentionsTripId && !isNegativeClosure(input.latestMessage)) {
+    const greeting = input.customerName ? `Hello ${input.customerName},` : "Hello,"
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: `${greeting}\n\nTo help me look this up properly, please share the ride reference or ride ID if you have it.\n\nIf you do not have the ride ID, send me:\n1. The trip date\n2. Pickup and destination\n3. The fare shown in the app\n4. The amount charged by the driver\n\nOnce I have those details, I can route this to the right support team.`,
+      shouldEscalate: false,
+      shouldResolve: false,
+      confidence: 1,
+      category: isPaymentDispute ? "payment_issue" : "ride_issue",
+      department: isPaymentDispute ? "billing" : "operations",
+      reason: "Trip-specific issue needs ride reference before escalation",
     }
   }
 
