@@ -27,6 +27,7 @@ const footerLinks = {
     { href: "/faq", label: "FAQ" },
     { href: "/support", label: "Help Center" },
     { href: "/contact", label: "Contact Us" },
+    { href: "https://status.charterkeke.com", label: "System Status" },
   ],
 }
 

@@ -16,6 +16,7 @@ const navLinks = [
   { href: "/about", label: "About" },
   { href: "/install", label: "App" },
   { href: "/contact", label: "Contact" },
+  { href: "https://status.charterkeke.com", label: "Status" },
 ]
 
 export function Navbar() {
