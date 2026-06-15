@@ -199,6 +199,56 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (status === "completed") {
+      try {
+        const completedDistanceKm = Number(updatedRide.distance_km || ride.distance_km || 0)
+        const completedMinutes = Number(
+          updatedRide.duration_minutes ||
+          updateData.duration_minutes ||
+          updatedRide.eta_minutes ||
+          ride.eta_minutes ||
+          0
+        )
+        const safeDistanceKm = completedDistanceKm > 0 ? completedDistanceKm : 0
+        const safeMinutes = completedMinutes > 0 ? completedMinutes : 0
+        const completedRouteKey = `${String(ride.pickup_zone || "").trim().toLowerCase()}->${String(ride.destination_zone || "").trim().toLowerCase()}`
+        const { data: existingMetric } = await supabaseAdmin!
+          .from("route_metrics")
+          .select("id, ride_count, avg_minutes_per_km")
+          .eq("route_key", completedRouteKey)
+          .maybeSingle()
+
+        const previousCount = Number(existingMetric?.ride_count || 0)
+        const previousAverage = Number(existingMetric?.avg_minutes_per_km || 0)
+        const newAverage =
+          safeDistanceKm > 0 && safeMinutes > 0
+            ? previousCount > 0
+              ? ((previousAverage * previousCount) + (safeMinutes / safeDistanceKm)) / (previousCount + 1)
+              : safeMinutes / safeDistanceKm
+            : previousAverage || 6
+
+        const { error: metricsError } = await supabaseAdmin!
+          .from("route_metrics")
+          .upsert({
+            route_key: completedRouteKey,
+            pickup_label: ride.pickup_zone || null,
+            destination_label: ride.destination_zone || null,
+            ride_count: previousCount + 1,
+            avg_minutes_per_km: Number.isFinite(newAverage) ? Number(newAverage.toFixed(2)) : 6,
+            last_estimated_minutes: Number(ride.eta_minutes || null),
+            last_actual_minutes: safeMinutes || null,
+            last_distance_km: safeDistanceKm || null,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "route_key" })
+
+        if (metricsError) {
+          console.error("[UpdateRideStatus] Failed to persist route metrics:", metricsError)
+        }
+      } catch (metricsError) {
+        console.error("[UpdateRideStatus] Route metrics learning write failed:", metricsError)
+      }
+    }
+
     // Send push notifications based on status
     try {
       if (status === "in_progress") {
