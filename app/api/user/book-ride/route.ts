@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
 
       // Try to parse the pickup time
       const pickupDate = new Date(pickup_time)
-      
+
       // Check if the date is valid
       if (isNaN(pickupDate.getTime())) {
         throw new Error('Invalid date format')
@@ -310,7 +310,7 @@ export async function POST(request: NextRequest) {
       const smsResults = await Promise.allSettled(smsTasks)
       let smsSuccessCount = 0
       let smsFailureCount = 0
-      
+
       for (let i = 0; i < smsResults.length; i++) {
         const result = smsResults[i]
         if (result.status === "rejected") {

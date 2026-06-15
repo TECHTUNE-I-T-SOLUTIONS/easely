@@ -27,7 +27,7 @@ const footerLinks = {
     { href: "/faq", label: "FAQ" },
     { href: "/support", label: "Help Center" },
     { href: "/contact", label: "Contact Us" },
-    { href: "https://status.charterkeke.com", label: "System Status" },
+    { href: "https://system.charterkeke.com", label: "System Status" },
   ],
 }
 
@@ -55,7 +55,7 @@ export function Footer() {
             <Link href="/" className="flex items-center gap-2">
               <motion.div whileHover={{ rotate: 10 }} transition={{ type: "spring", stiffness: 300 }}>
                 <div className="w-12 h-12 bg-gradient-to-r from-[#AF6401] to-[#EE8906] rounded-lg flex items-center justify-center text-white font-bold text-2xl">
-                <Image src="/charter keke.png" alt="Charter Keke" width={40} height={40} className="rounded-lg" />
+                  <Image src="/charter keke.png" alt="Charter Keke" width={40} height={40} className="rounded-lg" />
                 </div>
               </motion.div>
               <span className="text-xl font-bold bg-gradient-to-r from-[#AF6401] to-[#EE8906] dark:bg-gradient-to-r dark:from-[#FCE6C9] dark:to-[#F0D1A8] bg-clip-text text-transparent group-hover:opacity-80 transition-opacity">
@@ -76,12 +76,12 @@ export function Footer() {
             {/* Contact Info */}
             <div className="space-y-3">
               <a
-              href="mailto:support@charterkeke.com"
-              className="flex items-center gap-3 text-muted-foreground dark:text-white hover:text-foreground transition-colors group"
-            >
-              <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-                <Mail className="h-4 w-4 text-primary" />
-              </div>
+                href="mailto:support@charterkeke.com"
+                className="flex items-center gap-3 text-muted-foreground dark:text-white hover:text-foreground transition-colors group"
+              >
+                <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                  <Mail className="h-4 w-4 text-primary" />
+                </div>
                 <span>support@charterkeke.com</span>
               </a>
               <a
