@@ -146,6 +146,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       attachmentName,
       attachmentMimeType,
       attachmentSize,
+      clientId,
       isInternal = false,
     } = body || {};
 
@@ -172,6 +173,24 @@ export async function POST(request: NextRequest, { params }: Params) {
     const now = new Date().toISOString();
     let targetTicketId = ticketId;
     let reopenedSameTicket = false;
+
+    if (typeof clientId === "string" && clientId.trim()) {
+      const { data: existingMessage } = await supabaseAdmin
+        .from("ticket_messages")
+        .select("id, ticket_id, message, created_at")
+        .eq("ticket_id", targetTicketId)
+        .contains("metadata", { clientId: clientId.trim() })
+        .maybeSingle();
+
+      if (existingMessage) {
+        return NextResponse.json({
+          message: existingMessage,
+          ticketId: targetTicketId,
+          reopened: reopenedSameTicket,
+          deduped: true,
+        }, { status: 200 });
+      }
+    }
 
     if (!isAdmin && (ticket.status === "resolved" || ticket.status === "closed")) {
       const { data: reopenedTicket, error: reopenError } = await supabaseAdmin
@@ -202,7 +221,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       reopenedSameTicket = true;
     }
 
-    const payload = {
+    const payload: Record<string, any> = {
       ticket_id: targetTicketId,
       sender_id: session.user.id,
       message: text || "[attachment]",
@@ -220,6 +239,9 @@ export async function POST(request: NextRequest, { params }: Params) {
       department_key: isAdmin ? "support" : null,
       metadata: { conversationId: ticket.conversation_id || null },
     };
+    if (typeof clientId === "string" && clientId.trim()) {
+      payload.metadata = { ...payload.metadata, clientId: clientId.trim() };
+    }
 
     const { data: created, error: createError } = await supabaseAdmin
       .from("ticket_messages")
