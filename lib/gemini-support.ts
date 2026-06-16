@@ -193,8 +193,13 @@ function buildRoleAwareRemittanceReply(input: SupportAIInput) {
   const driverName = input.driverContext?.fullName?.trim()
   const settlementStatus = input.driverContext?.settlementStatus?.trim()
   const walletRoute = input.driverContext?.walletRoute || DRIVER_WALLET_ROUTE
+  const normalized = input.latestMessage.toLowerCase()
+  const wantsRemittanceHelp =
+    /\b(remittance|settlement|wallet|payout|pay out|payment|pay|earnings|balance|overdue|due today|due now)\b/i.test(normalized) ||
+    /\b(how do i|how can i|where do i|can i)\b.*\b(remittance|settlement|wallet|payment|earnings|balance)\b/i.test(normalized) ||
+    /\b(check|look up|view|show)\b.*\b(remittance|settlement|wallet|balance|due)\b/i.test(normalized)
 
-  if (isDriverRole(input.userRole)) {
+  if (isDriverRole(input.userRole) && wantsRemittanceHelp) {
     const settlementLine = settlementStatus
       ? `Your latest settlement status is ${settlementStatus}.`
       : "I can check your current settlement details in the Wallet screen."
@@ -214,7 +219,7 @@ function buildRoleAwareRemittanceReply(input: SupportAIInput) {
     } satisfies SupportAIResult
   }
 
-  if (isRiderRole(input.userRole)) {
+  if (isRiderRole(input.userRole) && wantsRemittanceHelp) {
     return {
       ok: true,
       model: "dapo-template",
@@ -245,6 +250,83 @@ function isTopicSwitch(message: string, history?: SupportMessage[]) {
   const messageHits = topicWords.filter((word) => cleanedMessage.includes(word))
   const assistantHits = topicWords.filter((word) => cleanedAssistant.includes(word))
   return messageHits.some((word) => !assistantHits.includes(word))
+}
+
+function directFaqReply(input: SupportAIInput) {
+  const text = input.latestMessage.toLowerCase()
+  const greeting = input.customerName ? `Hi ${input.customerName},` : "Hi,"
+
+  if (/\b(delete|deletion)\b.*\b(account|profile)\b|\baccount deletion\b/i.test(text)) {
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: `${greeting}\n\nTo delete your account, open Profile, then Privacy/Security or Delete Account if it is available in your app version. If you cannot see the option, I can escalate it to support for manual review.`,
+      shouldEscalate: true,
+      shouldResolve: false,
+      confidence: 0.97,
+      category: "account_issue",
+      department: "support",
+      reason: "Account deletion handled directly",
+    } satisfies SupportAIResult
+  }
+
+  if (/\b(otp|one time password|verification code|code)\b/i.test(text) || /\b(login|sign in|signin|password)\b/i.test(text)) {
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: `${greeting}\n\nFor login or OTP issues, confirm your phone number or email, check your network connection, wait for the code window to expire, then try resend once. If the code still fails or the account is locked, I’ll escalate it to support.`,
+      shouldEscalate: true,
+      shouldResolve: false,
+      confidence: 0.97,
+      category: "technical",
+      department: "engineering",
+      reason: "Login/OTP support handled directly",
+    } satisfies SupportAIResult
+  }
+
+  if (/\b(verified|verification|documents|pending verification)\b/i.test(text) && /\b(driver|driver account)\b/i.test(text)) {
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: `${greeting}\n\nDriver verification is checked from the driver profile/documents area. If your verification is still pending, refresh the status and make sure your documents are complete. If it remains pending for too long, I’ll escalate it to support.`,
+      shouldEscalate: true,
+      shouldResolve: false,
+      confidence: 0.96,
+      category: "account_issue",
+      department: "support",
+      reason: "Driver verification handled directly",
+    } satisfies SupportAIResult
+  }
+
+  if (/\b(cancel|cancellation)\b/i.test(text)) {
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: `${greeting}\n\nIf the ride is still pending and not yet accepted, you can usually cancel from the booking or ride screen. If it has already been accepted or is in progress, the cancellation may need review, so I can escalate it to support.`,
+      shouldEscalate: false,
+      shouldResolve: false,
+      confidence: 0.95,
+      category: "ride_issue",
+      department: "operations",
+      reason: "Cancellation guidance handled directly",
+    } satisfies SupportAIResult
+  }
+
+  if (/\b(crash|force close|app crash|something went wrong|error)\b/i.test(text)) {
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: `${greeting}\n\nPlease tell me the screen where it crashed, the exact action you took, your device model, and OS version. If it blocks booking, ride details, login, or wallet, I’ll escalate it to engineering right away.`,
+      shouldEscalate: true,
+      shouldResolve: false,
+      confidence: 0.96,
+      category: "technical",
+      department: "engineering",
+      reason: "Crash triage handled directly",
+    } satisfies SupportAIResult
+  }
+
+  return null
 }
 
 function supportPrompt(input: SupportAIInput) {
@@ -330,6 +412,9 @@ function parseJson(text: string): any {
 export async function generateSupportAIReply(input: SupportAIInput): Promise<SupportAIResult> {
   const remittanceReply = buildRoleAwareRemittanceReply(input)
   if (remittanceReply) return remittanceReply
+
+  const faqReply = directFaqReply(input)
+  if (faqReply) return faqReply
 
   if (isShortAcknowledgement(input.latestMessage)) {
     return {
@@ -445,6 +530,26 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
       category: isPaymentDispute ? "payment_issue" : "ride_issue",
       department: isPaymentDispute ? "billing" : "operations",
       reason: "Trip-specific issue needs ride reference before escalation",
+    }
+  }
+
+  if (topicSwitch) {
+    const memoryMatches = (input.businessMemory || []).filter((item) =>
+      [item.title, item.content, item.category, item.route, item.audience].join(" ").toLowerCase().includes(normalizedLatest.split(/\s+/)[0] || "")
+    )
+    if (memoryMatches.length) {
+      const top = memoryMatches[0]
+      return {
+        ok: true,
+        model: "dapo-template",
+        reply: `${input.customerName ? `Hi ${input.customerName},` : "Hi,"}\n\n${top.content || "I can help with that."}${top.route ? `\n\nOpen in app: ${top.route}` : ""}`,
+        shouldEscalate: false,
+        shouldResolve: false,
+        confidence: 0.9,
+        category: top.category || "other",
+        department: "support",
+        reason: "Topic switch answered from support memory",
+      }
     }
   }
 
