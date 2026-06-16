@@ -26,6 +26,49 @@ async function getNextCaseNumber(conversationId: string | null) {
   return (count || 0) + 1;
 }
 
+function isLikelyCorrection(message: string) {
+  const normalized = message.trim().toLowerCase();
+  return (
+    /\b(no|not that|actually|correction|i meant|what i said|it is|its|my name is|look it up)\b/i.test(normalized) &&
+    !/\b(help|support)\b/i.test(normalized)
+  );
+}
+
+async function saveAiCorrection(ticketId: string, userId: string, role: string, originalReply: string, userMessage: string, note?: string) {
+  if (!supabaseAdmin) return;
+  await supabaseAdmin.from("support_ai_feedback").insert({
+    ticket_id: ticketId,
+    user_id: userId,
+    role,
+    feedback_type: "corrected_answer",
+    original_reply: originalReply,
+    corrected_reply: userMessage,
+    correction_note: note || "User corrected the assistant in support chat.",
+    route: role === "driver" ? "/driver/wallet" : null,
+    tags: ["correction", role],
+    metadata: { source: "in_app_support" },
+  });
+
+  try {
+    await supabaseAdmin.from("support_ai_memory").insert({
+      memory_type: "correction",
+      title: "User correction from support chat",
+      content: userMessage,
+      category: "other",
+      audience: role === "driver" ? "driver" : "all",
+      route: role === "driver" ? "/driver/wallet" : null,
+      tags: ["correction", role],
+      source: "support_feedback",
+      source_entity_type: "ticket_message",
+      source_entity_id: ticketId,
+      confidence: 0.75,
+      metadata: { note: note || "auto captured correction" },
+    });
+  } catch {
+    return;
+  }
+}
+
 async function getRecentSupportContext(userId: string) {
   if (!supabaseAdmin) return { recentTickets: [], businessMemory: [] as any[] };
 
@@ -253,9 +296,8 @@ export async function POST(request: NextRequest, { params }: Params) {
         return null;
       });
 
-      if (ai?.ok && ai.reply) {
-        const senderId = await getAutomationSenderId();
-        if (senderId) {
+      const senderId = await getAutomationSenderId();
+      if (ai?.ok && ai.reply && senderId) {
           await supabaseAdmin.from("ticket_messages").insert({
             ticket_id: targetTicketId,
             sender_id: senderId,
@@ -272,7 +314,17 @@ export async function POST(request: NextRequest, { params }: Params) {
               deepLink: ai.department === "billing" && session.user.role === "driver" ? "/driver/wallet" : null,
             },
           });
-        }
+      }
+
+      if (isLikelyCorrection(text) && ai?.reply) {
+        await saveAiCorrection(
+          targetTicketId,
+          session.user.id,
+          session.user.role,
+          ai.reply,
+          text,
+          "User corrected the assistant after a support reply."
+        );
       }
 
       if (ai?.shouldEscalate) {

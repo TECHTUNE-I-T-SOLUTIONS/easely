@@ -92,6 +92,54 @@ async function getRecentSupportContext(userId: string) {
   };
 }
 
+async function getDriverContext(userId: string) {
+  if (!supabaseAdmin) return null;
+
+  const { data: driver } = await supabaseAdmin
+    .from("drivers")
+    .select(
+      `
+        id,
+        verified,
+        availability_status,
+        user_id,
+        users:user_id (
+          first_name,
+          last_name,
+          phone_number
+        )
+      `
+    )
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!driver) return null;
+
+  const { data: latestSettlement } = await supabaseAdmin
+    .from("driver_daily_settlement")
+    .select("settlement_status, payment_due_date, total_platform_fees")
+    .eq("driver_id", driver.id)
+    .order("payment_due_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const user = Array.isArray(driver.users) ? driver.users[0] : driver.users;
+  const fullName = [user?.first_name, user?.last_name].filter(Boolean).join(" ").trim();
+
+  return {
+    driverId: driver.id,
+    fullName: fullName || null,
+    phoneNumber: user?.phone_number || null,
+    walletRoute: "/driver/wallet",
+    currentAvailability: driver.availability_status || null,
+    verified: Boolean(driver.verified),
+    settlementStatus: latestSettlement?.settlement_status || null,
+    settlementDueDate: latestSettlement?.payment_due_date || null,
+    overdueAmount: Number(latestSettlement?.total_platform_fees || 0),
+    lastPaymentAt: null,
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
     if (!supabaseAdmin) {
@@ -216,6 +264,7 @@ export async function POST(request: NextRequest) {
     const conversation = await getOrCreateInAppConversation(session.user.id, subject);
     const caseNumber = await getNextCaseNumber(conversation?.id || null);
     const aiContext = await getRecentSupportContext(session.user.id).catch(() => ({ recentTickets: [], businessMemory: [] }));
+    const driverContext = session.user.role === "driver" ? await getDriverContext(session.user.id).catch(() => null) : null;
 
     const { data: ticket, error: ticketError } = await supabaseAdmin
       .from("support_tickets")
@@ -290,6 +339,7 @@ export async function POST(request: NextRequest) {
         userRole: session.user.role,
         latestMessage: firstMessageText,
         history: [{ role: "customer", content: firstMessageText }],
+        driverContext,
         recentTickets: aiContext.recentTickets,
         businessMemory: aiContext.businessMemory,
       }).catch((error) => {
@@ -297,50 +347,72 @@ export async function POST(request: NextRequest) {
         return null;
       });
 
-      if (ai?.ok && ai.reply) {
+      const aiResult = ai?.ok ? ai : null;
+
+      if (aiResult?.reply) {
         const senderId = await getAutomationSenderId();
         if (senderId) {
           await supabaseAdmin.from("ticket_messages").insert({
             ticket_id: ticket.id,
             sender_id: senderId,
-            message: ai.reply,
+            message: aiResult.reply,
             message_type: "text",
             is_internal: false,
             sender_type: "assistant",
             sender_label: "Dapo - Charter Keke assistant",
-            department_key: ai.department || "support",
+            department_key: aiResult.department || "support",
             metadata: {
               conversationId: conversation?.id || null,
               caseNumber,
-              model: ai.model,
-              category: ai.category,
-              deepLink: ai.department === "billing" && session.user.role === "driver" ? "/driver/wallet" : null,
+              model: aiResult.model,
+              category: aiResult.category,
+              deepLink: aiResult.department === "billing" && session.user.role === "driver" ? "/driver/wallet" : null,
             },
           });
         }
+        try {
+          await supabaseAdmin.from("support_ai_memory").insert({
+            memory_type: "knowledge",
+            title: subject,
+            content: aiResult.reply,
+            category: aiResult.category || null,
+            audience: session.user.role === "driver" ? "driver" : "all",
+            route: aiResult.department === "billing" && session.user.role === "driver" ? "/driver/wallet" : null,
+            tags: [aiResult.category || "other", session.user.role || "all"],
+            source: "ai_reply",
+            confidence: aiResult.confidence || 0.5,
+            metadata: {
+              ticketId: ticket.id,
+              conversationId: conversation?.id || null,
+              model: aiResult.model,
+            },
+          });
+        } catch {
+          // Ignore memory write failures; the reply itself already succeeded.
+        }
       }
 
-      if (ai?.shouldEscalate) {
+      if (aiResult?.shouldEscalate) {
         await notifyAdmins({
           allAdmins: true,
-          department: ai.department || "support",
+          department: aiResult.department || "support",
           title: "AI escalated support ticket",
-          body: ai.reason || `${session.user.firstName || "A customer"} needs human support.`,
+          body: aiResult.reason || `${session.user.firstName || "A customer"} needs human support.`,
           type: "support_ai_escalation",
           actionUrl: `/admin/crm?ticket=${ticket.id}`,
-          metadata: { ticketId: ticket.id, userId: session.user.id, category: ai.category, model: ai.model },
-          sourceEventId: `support_ai_escalation:${ticket.id}:${ai.category || "other"}`,
+          metadata: { ticketId: ticket.id, userId: session.user.id, category: aiResult.category, model: aiResult.model },
+          sourceEventId: `support_ai_escalation:${ticket.id}:${aiResult.category || "other"}`,
         }).catch((error) => console.error("[SUPPORT][TICKETS][AI_ESCALATE]", error));
       }
 
-      if (ai?.shouldResolve) {
+      if (aiResult?.shouldResolve) {
         await supabaseAdmin
           .from("support_tickets")
           .update({
             status: "resolved",
             resolved_at: new Date().toISOString(),
             resolution_requested_at: new Date().toISOString(),
-            resolution_note: ai.reason || "Dapo marked this case resolved after customer confirmation.",
+            resolution_note: aiResult.reason || "Dapo marked this case resolved after customer confirmation.",
           })
           .eq("id", ticket.id);
       }

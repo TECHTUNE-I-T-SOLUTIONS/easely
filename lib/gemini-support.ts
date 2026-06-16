@@ -11,6 +11,18 @@ type SupportAIInput = {
   userRole?: string | null
   latestMessage: string
   history?: SupportMessage[]
+  driverContext?: {
+    driverId?: string | null
+    fullName?: string | null
+    phoneNumber?: string | null
+    walletRoute?: string | null
+    currentAvailability?: string | null
+    verified?: boolean | null
+    settlementStatus?: string | null
+    settlementDueDate?: string | null
+    overdueAmount?: number | null
+    lastPaymentAt?: string | null
+  } | null
   recentTickets?: Array<{
     id: string
     subject?: string | null
@@ -178,14 +190,20 @@ function routeReply(reply: string, route?: string | null) {
 
 function buildRoleAwareRemittanceReply(input: SupportAIInput) {
   const greeting = input.customerName ? `Hello ${input.customerName},` : "Hello,"
+  const driverName = input.driverContext?.fullName?.trim()
+  const settlementStatus = input.driverContext?.settlementStatus?.trim()
+  const walletRoute = input.driverContext?.walletRoute || DRIVER_WALLET_ROUTE
 
   if (isDriverRole(input.userRole)) {
+    const settlementLine = settlementStatus
+      ? `Your latest settlement status is ${settlementStatus}.`
+      : "I can check your current settlement details in the Wallet screen."
     return {
       ok: true,
       model: "dapo-template",
       reply: routeReply(
-        `${greeting}\n\nDrivers can pay their platform remittance from the Wallet screen in the driver app. Open your wallet, review the outstanding settlement, and follow the payment steps there.`,
-        DRIVER_WALLET_ROUTE
+        `${greeting}\n\n${driverName ? `${driverName}, ` : ""}drivers can pay their platform remittance from the Wallet screen in the driver app. ${settlementLine} Open your wallet, review the outstanding settlement, and follow the payment steps there.`,
+        walletRoute
       ),
       shouldEscalate: false,
       shouldResolve: false,
@@ -330,6 +348,7 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
   }
 
   const normalizedLatest = input.latestMessage.toLowerCase()
+  const driverCtx = input.driverContext
   const tripSpecificKeywords = [
     "ride",
     "trip",
@@ -355,6 +374,33 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
   const isGenericPolicyQuestion =
     /\b(how do|how does|what is|can i|can drivers|do drivers|where do)\b/i.test(input.latestMessage) &&
     !/\b(today|yesterday|this morning|this afternoon|last night|at \d{1,2}:\d{2})\b/i.test(input.latestMessage)
+
+  if (driverCtx && isDriverRole(input.userRole) && /\b(name|phone|remittance|settlement|wallet|pay|payment|earnings|balance|today|due)\b/i.test(normalizedLatest)) {
+    const greeting = input.customerName ? `Hello ${input.customerName},` : "Hello,"
+    const lines = [
+      greeting,
+      "",
+      `${driverCtx.fullName ? `I found your driver profile for ${driverCtx.fullName}.` : "I found your driver profile."}`,
+      driverCtx.phoneNumber ? `Phone on file ends with ${driverCtx.phoneNumber.slice(-4)}.` : null,
+      driverCtx.settlementStatus ? `Settlement status: ${driverCtx.settlementStatus}.` : null,
+      driverCtx.overdueAmount != null ? `Outstanding amount: ₦${Number(driverCtx.overdueAmount).toLocaleString()}.` : null,
+      driverCtx.settlementDueDate ? `Due date: ${new Date(driverCtx.settlementDueDate).toLocaleDateString()}.` : null,
+      "",
+      `Open your wallet here: ${driverCtx.walletRoute || DRIVER_WALLET_ROUTE}`,
+    ].filter(Boolean)
+
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: lines.join("\n"),
+      shouldEscalate: false,
+      shouldResolve: false,
+      confidence: 1,
+      category: "payment_issue",
+      department: "billing",
+      reason: "Driver context used to answer remittance without asking for ride ID",
+    }
+  }
 
   if ((mentionsTrip || isPaymentDispute) && !mentionsTripId && !isNegativeClosure(input.latestMessage) && !isGenericPolicyQuestion) {
     const greeting = input.customerName ? `Hello ${input.customerName},` : "Hello,"
