@@ -144,13 +144,97 @@ values
   (
     'policy',
     'Rider should not see driver remittance internals',
-    'If a rider asks about driver remittance or settlement, explain it is only available to drivers and keep internal payment flow details private.',
+    'If a rider asks about driver remittance or settlement, explain it is only available to drivers and keep internal payment flow details private. Riders pay drivers directly off-platform for rides, and drivers later remit the platform settlement at the end of the day.',
     'policy',
     'rider',
     null,
     array['privacy', 'role-scope', 'driver'],
     'seed',
     0.95,
+    '{"priority":"high"}'::jsonb
+  ),
+  (
+    'faq',
+    'Account deletion help',
+    'If a user wants to delete an account, explain that account deletion is available from the app profile or privacy/settings area if enabled. Ask them to open the Profile tab, then Privacy/Security or Delete Account. If the option is not visible, escalate to support.',
+    'account_issue',
+    'all',
+    '/profile',
+    array['account', 'delete account', 'privacy'],
+    'seed',
+    0.93,
+    '{"priority":"high"}'::jsonb
+  ),
+  (
+    'faq',
+    'Login and OTP help',
+    'For login or OTP problems, ask the user to confirm their phone number or email, check network connectivity, wait for the OTP window, and try resend once. If codes still fail or the account is locked, escalate to support or engineering depending on the error.',
+    'technical',
+    'all',
+    null,
+    array['login', 'otp', 'password', 'verification'],
+    'seed',
+    0.93,
+    '{"priority":"high"}'::jsonb
+  ),
+  (
+    'faq',
+    'Driver verification status',
+    'If a driver asks about verification, explain that ride acceptance and wallet access depend on driver approval. Ask them to open the driver profile or verification/documents area and refresh status. If pending too long or details are missing, escalate to support.',
+    'account_issue',
+    'driver',
+    '/driver/profile',
+    array['driver', 'verification', 'documents'],
+    'seed',
+    0.93,
+    '{"priority":"high"}'::jsonb
+  ),
+  (
+    'faq',
+    'Rider booking support',
+    'For rider booking questions, explain the booking flow: choose pickup, choose destination, confirm time if needed, review fare, then confirm booking. If the map search or location picker fails, tell them to retry location permission, refresh the app, or use a recent location, and escalate if the booking system appears broken.',
+    'ride_issue',
+    'rider',
+    '/rider/booking',
+    array['rider', 'booking', 'pickup', 'destination'],
+    'seed',
+    0.93,
+    '{"priority":"high"}'::jsonb
+  ),
+  (
+    'faq',
+    'Ride cancellation before acceptance',
+    'If a rider cancels before a driver accepts, explain that cancellation is usually available from the active booking or ride request screen. If a driver has not yet accepted, the rider can cancel without needing escalation. If the booking is already accepted, advise that the cancellation policy may depend on ride state and support review may be needed.',
+    'ride_issue',
+    'rider',
+    '/rider/booking',
+    array['cancellation', 'booking', 'before acceptance'],
+    'seed',
+    0.92,
+    '{"priority":"high"}'::jsonb
+  ),
+  (
+    'faq',
+    'Ride cancellation after booking',
+    'If a user asks about cancelling after booking, first check whether the ride is still pending or already accepted. If pending, direct them to cancel from the ride or booking screen. If accepted or in progress, explain the driver may already be assigned and the case may need support review or policy handling.',
+    'ride_issue',
+    'all',
+    null,
+    array['cancellation', 'ride', 'after booking'],
+    'seed',
+    0.92,
+    '{"priority":"high"}'::jsonb
+  ),
+  (
+    'faq',
+    'App crash troubleshooting',
+    'For app crashes, ask for the exact screen, the action they took, device model, OS version, and whether it happens every time. Tell them to update the app, restart the device, and retry. If the crash affects a core flow like ride details, login, or booking, escalate to engineering with the screen name and any screenshot or local log details.',
+    'technical',
+    'all',
+    null,
+    array['crash', 'app crash', 'engineering', 'bug'],
+    'seed',
+    0.94,
     '{"priority":"high"}'::jsonb
   )
 on conflict do nothing;

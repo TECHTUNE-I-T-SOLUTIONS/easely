@@ -92,6 +92,39 @@ async function getRecentSupportContext(userId: string) {
   };
 }
 
+async function getRelevantSupportMemory(query: string, audience?: string | null) {
+  if (!supabaseAdmin) return [];
+  const terms = Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/i)
+        .filter((term) => term.length >= 3)
+        .slice(0, 8)
+    )
+  );
+  if (!terms.length) return [];
+
+  const filters = terms
+    .map((term) => `title.ilike.%${term}%,content.ilike.%${term}%,tags.cs.{${term}}`)
+    .join(",");
+
+  let queryBuilder = supabaseAdmin
+    .from("support_ai_memory")
+    .select("title, content, category, audience, route")
+    .eq("is_active", true)
+    .order("usefulness_score", { ascending: false })
+    .order("updated_at", { ascending: false })
+    .limit(6);
+
+  if (audience) {
+    queryBuilder = queryBuilder.or(`audience.eq.all,audience.eq.${audience}`);
+  }
+
+  const { data } = await queryBuilder.or(filters);
+  return Array.isArray(data) ? data : [];
+}
+
 export async function POST(request: NextRequest, { params }: Params) {
   try {
     if (!supabaseAdmin) {
@@ -268,6 +301,7 @@ export async function POST(request: NextRequest, { params }: Params) {
         .limit(12);
 
       const aiContext = await getRecentSupportContext(session.user.id).catch(() => ({ recentTickets: [], businessMemory: [] }));
+      const memoryContext = await getRelevantSupportMemory(text || ticket.subject, session.user.role).catch(() => []);
 
       const history = (recentMessages || [])
         .reverse()
@@ -290,7 +324,7 @@ export async function POST(request: NextRequest, { params }: Params) {
         latestMessage: text || "[attachment]",
         history,
         recentTickets: aiContext.recentTickets,
-        businessMemory: aiContext.businessMemory,
+        businessMemory: [...aiContext.businessMemory, ...(memoryContext || [])],
       }).catch((error) => {
         console.error("[SUPPORT][MESSAGES][AI]", error);
         return null;

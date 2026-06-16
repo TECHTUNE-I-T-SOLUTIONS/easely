@@ -92,6 +92,39 @@ async function getRecentSupportContext(userId: string) {
   };
 }
 
+async function getRelevantSupportMemory(query: string, audience?: string | null) {
+  if (!supabaseAdmin) return [];
+  const terms = Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/i)
+        .filter((term) => term.length >= 3)
+        .slice(0, 8)
+    )
+  );
+  if (!terms.length) return [];
+
+  const filters = terms
+    .map((term) => `title.ilike.%${term}%,content.ilike.%${term}%,tags.cs.{${term}}`)
+    .join(",");
+
+  let queryBuilder = supabaseAdmin
+    .from("support_ai_memory")
+    .select("title, content, category, audience, route")
+    .eq("is_active", true)
+    .order("usefulness_score", { ascending: false })
+    .order("updated_at", { ascending: false })
+    .limit(6);
+
+  if (audience) {
+    queryBuilder = queryBuilder.or(`audience.eq.all,audience.eq.${audience}`);
+  }
+
+  const { data } = await queryBuilder.or(filters);
+  return Array.isArray(data) ? data : [];
+}
+
 async function getDriverContext(userId: string) {
   if (!supabaseAdmin) return null;
 
@@ -303,6 +336,7 @@ export async function POST(request: NextRequest) {
     }
 
     const firstMessageText = (initialMessage || description || "").trim();
+    const memoryContext = await getRelevantSupportMemory(firstMessageText || subject, session.user.role).catch(() => []);
     if (firstMessageText) {
       const { error: msgError } = await supabaseAdmin.from("ticket_messages").insert({
         ticket_id: ticket.id,
@@ -341,7 +375,7 @@ export async function POST(request: NextRequest) {
         history: [{ role: "customer", content: firstMessageText }],
         driverContext,
         recentTickets: aiContext.recentTickets,
-        businessMemory: aiContext.businessMemory,
+        businessMemory: [...aiContext.businessMemory, ...(memoryContext || [])],
       }).catch((error) => {
         console.error("[SUPPORT][TICKETS][AI]", error);
         return null;

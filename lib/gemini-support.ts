@@ -152,7 +152,7 @@ function hasDapoIntroduced(history?: SupportMessage[]) {
 }
 
 function vagueSupportReply(customerName?: string | null) {
-  const greeting = customerName ? `Hello ${customerName},` : "Hello,"
+  const greeting = customerName ? `Hi ${customerName},` : "Hi,"
   return `${greeting}
 
 ${DAPO_INTRO}
@@ -189,7 +189,7 @@ function routeReply(reply: string, route?: string | null) {
 }
 
 function buildRoleAwareRemittanceReply(input: SupportAIInput) {
-  const greeting = input.customerName ? `Hello ${input.customerName},` : "Hello,"
+  const greeting = input.customerName ? `Hi ${input.customerName},` : "Hi,"
   const driverName = input.driverContext?.fullName?.trim()
   const settlementStatus = input.driverContext?.settlementStatus?.trim()
   const walletRoute = input.driverContext?.walletRoute || DRIVER_WALLET_ROUTE
@@ -229,6 +229,22 @@ function buildRoleAwareRemittanceReply(input: SupportAIInput) {
   }
 
   return null
+}
+
+function isShortAcknowledgement(message: string) {
+  const compact = message.trim().toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ")
+  return ["thanks", "thank you", "ok", "okay", "great", "nice", "got it", "cool"].includes(compact)
+}
+
+function isTopicSwitch(message: string, history?: SupportMessage[]) {
+  if (!history?.length) return false
+  const recentAssistant = history.slice().reverse().find((item) => item.role === "assistant")?.content || ""
+  const cleanedMessage = message.toLowerCase()
+  const cleanedAssistant = recentAssistant.toLowerCase()
+  const topicWords = ["remittance", "wallet", "account", "delete", "ride", "refund", "payment", "support", "booking", "driver", "rider", "profile", "password", "login", "verification"]
+  const messageHits = topicWords.filter((word) => cleanedMessage.includes(word))
+  const assistantHits = topicWords.filter((word) => cleanedAssistant.includes(word))
+  return messageHits.some((word) => !assistantHits.includes(word))
 }
 
 function supportPrompt(input: SupportAIInput) {
@@ -315,6 +331,20 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
   const remittanceReply = buildRoleAwareRemittanceReply(input)
   if (remittanceReply) return remittanceReply
 
+  if (isShortAcknowledgement(input.latestMessage)) {
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: "You are welcome. What else can I help with?",
+      shouldEscalate: false,
+      shouldResolve: false,
+      confidence: 1,
+      category: "other",
+      department: "support",
+      reason: "Short acknowledgement handled without repeating prior answer",
+    }
+  }
+
   if (isNegativeClosure(input.latestMessage)) {
     return {
       ok: true,
@@ -348,6 +378,7 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
   }
 
   const normalizedLatest = input.latestMessage.toLowerCase()
+  const topicSwitch = isTopicSwitch(input.latestMessage, input.history)
   const driverCtx = input.driverContext
   const tripSpecificKeywords = [
     "ride",
@@ -402,12 +433,12 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
     }
   }
 
-  if ((mentionsTrip || isPaymentDispute) && !mentionsTripId && !isNegativeClosure(input.latestMessage) && !isGenericPolicyQuestion) {
+  if ((mentionsTrip || isPaymentDispute) && !mentionsTripId && !isNegativeClosure(input.latestMessage) && !isGenericPolicyQuestion && !topicSwitch) {
     const greeting = input.customerName ? `Hello ${input.customerName},` : "Hello,"
     return {
       ok: true,
       model: "dapo-template",
-      reply: `${greeting}\n\nTo help me look this up properly, please share the ride reference or ride ID if you have it.\n\nIf you do not have the ride ID, send me:\n1. The trip date\n2. Pickup and destination\n3. The fare shown in the app\n4. The amount charged by the driver\n\nOnce I have those details, I can route this to the right support team.`,
+      reply: `${greeting}\n\nTo help me look this up properly, please share the ride reference or ride ID if you have it.\n\nIf this is not about a specific ride, tell me the main issue and I will answer directly.`,
       shouldEscalate: false,
       shouldResolve: false,
       confidence: 1,
