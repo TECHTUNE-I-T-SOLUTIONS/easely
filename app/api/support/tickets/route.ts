@@ -69,6 +69,29 @@ async function getNextCaseNumber(conversationId: string | null) {
   return (count || 0) + 1;
 }
 
+async function getRecentSupportContext(userId: string) {
+  if (!supabaseAdmin) return { recentTickets: [], businessMemory: [] as any[] };
+
+  const [{ data: recentTickets }, memoryResult] = await Promise.all([
+    supabaseAdmin
+      .from("support_tickets")
+      .select("id, subject, category, status, updated_at")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false })
+      .limit(5),
+    supabaseAdmin
+      .from("support_ai_memory")
+      .select("title, content, category, audience, route")
+      .order("updated_at", { ascending: false })
+      .limit(8),
+  ]);
+
+  return {
+    recentTickets: Array.isArray(recentTickets) ? recentTickets : [],
+    businessMemory: Array.isArray(memoryResult?.data) ? memoryResult.data : [],
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
     if (!supabaseAdmin) {
@@ -192,6 +215,7 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString();
     const conversation = await getOrCreateInAppConversation(session.user.id, subject);
     const caseNumber = await getNextCaseNumber(conversation?.id || null);
+    const aiContext = await getRecentSupportContext(session.user.id).catch(() => ({ recentTickets: [], businessMemory: [] }));
 
     const { data: ticket, error: ticketError } = await supabaseAdmin
       .from("support_tickets")
@@ -263,8 +287,11 @@ export async function POST(request: NextRequest) {
         channel: "in_app",
         subject,
         customerName: session.user.firstName,
+        userRole: session.user.role,
         latestMessage: firstMessageText,
         history: [{ role: "customer", content: firstMessageText }],
+        recentTickets: aiContext.recentTickets,
+        businessMemory: aiContext.businessMemory,
       }).catch((error) => {
         console.error("[SUPPORT][TICKETS][AI]", error);
         return null;
@@ -282,7 +309,13 @@ export async function POST(request: NextRequest) {
             sender_type: "assistant",
             sender_label: "Dapo - Charter Keke assistant",
             department_key: ai.department || "support",
-            metadata: { conversationId: conversation?.id || null, caseNumber, model: ai.model, category: ai.category },
+            metadata: {
+              conversationId: conversation?.id || null,
+              caseNumber,
+              model: ai.model,
+              category: ai.category,
+              deepLink: ai.department === "billing" && session.user.role === "driver" ? "/driver/wallet" : null,
+            },
           });
         }
       }

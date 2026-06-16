@@ -8,8 +8,23 @@ type SupportAIInput = {
   subject?: string | null
   customerName?: string | null
   customerEmail?: string | null
+  userRole?: string | null
   latestMessage: string
   history?: SupportMessage[]
+  recentTickets?: Array<{
+    id: string
+    subject?: string | null
+    category?: string | null
+    status?: string | null
+    updated_at?: string | null
+  }>
+  businessMemory?: Array<{
+    title?: string | null
+    content?: string | null
+    category?: string | null
+    audience?: string | null
+    route?: string | null
+  }>
 }
 
 type SupportAIResult = {
@@ -25,6 +40,9 @@ type SupportAIResult = {
 }
 
 const DAPO_INTRO = "Hi, my name is Dapo, but you can also call me Daps. I'm your Charter Keke journey assistant."
+const DRIVER_WALLET_ROUTE = "/driver/wallet"
+const RIDER_SUPPORT_ROUTE = "/rider/help-and-support"
+const DRIVER_SUPPORT_ROUTE = "/driver/help-and-support"
 
 const VAGUE_SUPPORT_OPTIONS = [
   "Ride issues - booking, pickup, live tracking, cancellation, or trip status",
@@ -139,10 +157,75 @@ How can I help today? Reply with the number that best matches your issue:
 You can also type a short description, and I will guide you from there.`
 }
 
+function getRoleLabel(userRole?: string | null) {
+  return String(userRole || "").toLowerCase()
+}
+
+function isDriverRole(userRole?: string | null) {
+  return getRoleLabel(userRole) === "driver"
+}
+
+function isRiderRole(userRole?: string | null) {
+  return getRoleLabel(userRole) === "rider"
+}
+
+function routeReply(reply: string, route?: string | null) {
+  const cleanRoute = typeof route === "string" && route.trim() ? route.trim() : ""
+  if (!cleanRoute) return reply
+  if (reply.includes(cleanRoute)) return reply
+  return `${reply}\n\nOpen in app: ${cleanRoute}`
+}
+
+function buildRoleAwareRemittanceReply(input: SupportAIInput) {
+  const greeting = input.customerName ? `Hello ${input.customerName},` : "Hello,"
+
+  if (isDriverRole(input.userRole)) {
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: routeReply(
+        `${greeting}\n\nDrivers can pay their platform remittance from the Wallet screen in the driver app. Open your wallet, review the outstanding settlement, and follow the payment steps there.`,
+        DRIVER_WALLET_ROUTE
+      ),
+      shouldEscalate: false,
+      shouldResolve: false,
+      confidence: 1,
+      category: "payment_issue",
+      department: "billing",
+      reason: "Driver remittance question answered with wallet route",
+    } satisfies SupportAIResult
+  }
+
+  if (isRiderRole(input.userRole)) {
+    return {
+      ok: true,
+      model: "dapo-template",
+      reply: `${greeting}\n\nThat remittance or settlement feature is only available to drivers. If you need ride help, I can assist here. If you want to become a driver, please use the driver signup flow in the app.`,
+      shouldEscalate: false,
+      shouldResolve: false,
+      confidence: 1,
+      category: "account_issue",
+      department: "support",
+      reason: "Rider asked about a driver-only remittance flow",
+    } satisfies SupportAIResult
+  }
+
+  return null
+}
+
 function supportPrompt(input: SupportAIInput) {
   const history = (input.history || [])
     .slice(-12)
     .map((item) => `${item.role.toUpperCase()}: ${item.content}`)
+    .join("\n")
+
+  const recentTickets = (input.recentTickets || [])
+    .slice(0, 5)
+    .map((ticket) => `- ${ticket.subject || ticket.id} [${ticket.status || "unknown"}] ${ticket.category || ""}`.trim())
+    .join("\n")
+  const businessMemory = (input.businessMemory || [])
+    .slice(0, 8)
+    .map((item) => `- ${item.title || "Memory"}: ${item.content || ""}${item.route ? ` | route: ${item.route}` : ""}${item.audience ? ` | audience: ${item.audience}` : ""}`)
     .join("\n")
 
   return `
@@ -152,6 +235,8 @@ If you have not introduced yourself in this conversation, introduce yourself onc
 Business facts:
 - Charter Keke connects riders/passengers with keke drivers.
 - Passenger/rider trip payments are paid directly to drivers in person. Do not claim card/wallet payment was processed by Charter Keke unless the user is discussing driver remittance/settlement.
+- When the user is a driver and asks about remittance, settlement, earnings, wallet, or pay-out flow, answer directly and point them to the driver wallet screen.
+- When the user is a rider and asks about driver-only remittance or wallet actions, say it is unavailable to riders and do not reveal internal driver payment steps.
 - Be warm, concise, calm, and practical.
 - If the customer message is vague, a greeting, or lacks enough detail, give a short numbered option menu for ride issues, payment issues, driver complaints, account issues, safety/emergency, and other.
 - Ask one focused follow-up question when details are missing after the customer chooses a category.
@@ -166,6 +251,7 @@ Business facts:
   - fare shown in the app
   - amount charged by the driver
 - If the user does not know the ride ID, ask for the date and route so support can search the trip, then continue with the other missing details.
+- If the user asks a general policy question that does not depend on a specific trip, do not ask for a ride ID.
 - Do not invent ride, payment, account, or driver details.
 - Never promise refunds or enforcement outcomes.
 - Do not answer outside Charter Keke customer support. If asked unrelated questions, politely redirect to Charter Keke support matters.
@@ -190,6 +276,12 @@ Customer: ${input.customerName || input.customerEmail || "Customer"}
 Conversation history:
 ${history || "(none)"}
 
+Recent support tickets:
+${recentTickets || "(none)"}
+
+Relevant business memory:
+${businessMemory || "(none)"}
+
 Latest customer message:
 ${input.latestMessage}
 `.trim()
@@ -202,6 +294,9 @@ function parseJson(text: string): any {
 }
 
 export async function generateSupportAIReply(input: SupportAIInput): Promise<SupportAIResult> {
+  const remittanceReply = buildRoleAwareRemittanceReply(input)
+  if (remittanceReply) return remittanceReply
+
   if (isNegativeClosure(input.latestMessage)) {
     return {
       ok: true,
@@ -247,12 +342,21 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
     "destination",
     "route",
     "driver",
+    "booking",
+    "cancel",
+    "cancelled",
+    "cancellation",
+    "status",
   ]
   const mentionsTrip = tripSpecificKeywords.some((keyword) => normalizedLatest.includes(keyword))
   const mentionsTripId = /\b(ride|trip)\s*(id|reference|ref)\b/i.test(input.latestMessage)
   const isPaymentDispute = /\b(fare|overcharge|charged|charge|discrepancy|amount)\b/i.test(input.latestMessage)
 
-  if ((mentionsTrip || isPaymentDispute) && !mentionsTripId && !isNegativeClosure(input.latestMessage)) {
+  const isGenericPolicyQuestion =
+    /\b(how do|how does|what is|can i|can drivers|do drivers|where do)\b/i.test(input.latestMessage) &&
+    !/\b(today|yesterday|this morning|this afternoon|last night|at \d{1,2}:\d{2})\b/i.test(input.latestMessage)
+
+  if ((mentionsTrip || isPaymentDispute) && !mentionsTripId && !isNegativeClosure(input.latestMessage) && !isGenericPolicyQuestion) {
     const greeting = input.customerName ? `Hello ${input.customerName},` : "Hello,"
     return {
       ok: true,

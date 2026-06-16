@@ -26,6 +26,29 @@ async function getNextCaseNumber(conversationId: string | null) {
   return (count || 0) + 1;
 }
 
+async function getRecentSupportContext(userId: string) {
+  if (!supabaseAdmin) return { recentTickets: [], businessMemory: [] as any[] };
+
+  const [{ data: recentTickets }, { data: businessMemory }] = await Promise.all([
+    supabaseAdmin
+      .from("support_tickets")
+      .select("id, subject, category, status, updated_at")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false })
+      .limit(5),
+    supabaseAdmin
+      .from("support_ai_memory")
+      .select("title, content, category, audience, route")
+      .order("updated_at", { ascending: false })
+      .limit(8),
+  ]);
+
+  return {
+    recentTickets: Array.isArray(recentTickets) ? recentTickets : [],
+    businessMemory: Array.isArray(businessMemory) ? businessMemory : [],
+  };
+}
+
 export async function POST(request: NextRequest, { params }: Params) {
   try {
     if (!supabaseAdmin) {
@@ -201,6 +224,8 @@ export async function POST(request: NextRequest, { params }: Params) {
         .order("created_at", { ascending: false })
         .limit(12);
 
+      const aiContext = await getRecentSupportContext(session.user.id).catch(() => ({ recentTickets: [], businessMemory: [] }));
+
       const history = (recentMessages || [])
         .reverse()
         .map((item: any) => {
@@ -218,8 +243,11 @@ export async function POST(request: NextRequest, { params }: Params) {
         channel: "in_app",
         subject: ticket.subject,
         customerName: session.user.firstName,
+        userRole: session.user.role,
         latestMessage: text || "[attachment]",
         history,
+        recentTickets: aiContext.recentTickets,
+        businessMemory: aiContext.businessMemory,
       }).catch((error) => {
         console.error("[SUPPORT][MESSAGES][AI]", error);
         return null;
@@ -237,7 +265,12 @@ export async function POST(request: NextRequest, { params }: Params) {
             sender_type: "assistant",
             sender_label: "Dapo - Charter Keke assistant",
             department_key: ai.department || "support",
-            metadata: { conversationId: ticket.conversation_id || null, model: ai.model, category: ai.category },
+            metadata: {
+              conversationId: ticket.conversation_id || null,
+              model: ai.model,
+              category: ai.category,
+              deepLink: ai.department === "billing" && session.user.role === "driver" ? "/driver/wallet" : null,
+            },
           });
         }
       }
