@@ -16,12 +16,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Ride ID is required" }, { status: 400 })
     }
 
-    // Get the ride and verify driver
+    // Resolve the driver row for this user. rides.driver_id references drivers.id
+    // (NOT users.id), so we must translate the session user id first — the old
+    // code filtered rides by driver_id = session.user.id and therefore never matched.
+    const { data: driverRow, error: driverRowError } = await supabaseAdmin
+      .from("drivers")
+      .select("id")
+      .eq("user_id", session.user.id)
+      .single()
+
+    if (driverRowError || !driverRow) {
+      return NextResponse.json({ error: "Driver profile not found" }, { status: 404 })
+    }
+
+    // Get the ride and verify this driver owns it
     const { data: ride, error: rideError } = await supabaseAdmin
       .from("rides")
       .select("id, driver_id, fare_amount, rider_id")
       .eq("id", rideId)
-      .eq("driver_id", session.user.id)
+      .eq("driver_id", driverRow.id)
       .single()
 
     if (rideError || !ride) {

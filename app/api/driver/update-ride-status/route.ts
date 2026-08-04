@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabase, supabaseAdmin } from "@/lib/supabase"
 import { getSessionFromRequest } from "@/lib/auth"
 import { notifyAdmins } from "@/lib/admin-notifications"
-import { emitDriverArrived, emitRideCompleted, emitRideUpdate } from "@/lib/push-emitters"
+import { emitRideCompleted, emitRideUpdate } from "@/lib/push-emitters"
 import { sendPushNotification } from "@/lib/push-service"
 import { cancelExpiredOpenRides, isRideExpired } from "@/lib/ride-expiry"
 import { requireVerifiedDriver } from "@/lib/driver-verification"
@@ -252,25 +252,21 @@ export async function POST(request: NextRequest) {
     // Send push notifications based on status
     try {
       if (status === "in_progress") {
-        // Driver arrived at pickup
+        // Trip has STARTED (rider is on board and moving to the destination).
+        // NOTE: "Driver arrived" is a separate, notification-only event handled by
+        // POST /api/driver/notify-arrival. Do NOT send an arrival push here or the
+        // rider gets a contradictory "arrived / on the way" message.
         const { data: driverUser } = await supabaseAdmin!
           .from("users")
           .select("first_name, last_name, phone_number")
           .eq("id", session.user.id)
           .single()
 
-        const driverName = driverUser 
-          ? `${driverUser.first_name} ${driverUser.last_name}` 
+        const driverName = driverUser
+          ? `${driverUser.first_name} ${driverUser.last_name}`
           : "Your Driver"
 
-        // WebSocket notifications
-        await emitDriverArrived(
-          ride.rider_id,
-          rideId,
-          driverName,
-          "Keke Tricycle"
-        )
-
+        // WebSocket / realtime status updates
         await emitRideUpdate(
           session.user.id,
           rideId,
@@ -282,28 +278,29 @@ export async function POST(request: NextRequest) {
           ride.rider_id,
           rideId,
           "status",
-          `Your ride is now in progress from ${ride.pickup_zone} to ${ride.destination_zone}.`
+          `Your trip is now in progress from ${ride.pickup_zone} to ${ride.destination_zone}.`
         )
 
         // Push notification to rider
         await sendPushNotification([ride.rider_id], {
-          title: "🚗 Driver Arrived",
-          body: `${driverName} is on the way to pick you up`,
-          type: "ride_update",
+          title: "🚕 Trip Started",
+          body: `You're on your way from ${ride.pickup_zone} to ${ride.destination_zone}.`,
+          type: "trip_started",
           data: {
             rideId,
             status: "in_progress",
             driverName,
             pickup: ride.pickup_zone,
             destination: ride.destination_zone,
+            deeplink: `/rider/active-ride?rideId=${rideId}`,
           },
         })
 
         // Push notification to driver
         await sendPushNotification([session.user.id], {
-          title: "🚗 Trip Started",
-          body: `Trip ${rideId.slice(0, 8)} started. Heading to ${ride.pickup_zone}`,
-          type: "ride_update",
+          title: "🚕 Trip Started",
+          body: `Trip ${rideId.slice(0, 8)} started. Heading to ${ride.destination_zone}`,
+          type: "trip_started",
           data: {
             rideId,
             status: "in_progress",

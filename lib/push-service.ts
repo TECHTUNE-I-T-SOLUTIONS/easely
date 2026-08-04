@@ -52,6 +52,30 @@ const isPlaceholderToken = (token?: string | null) =>
   !token || token.startsWith('placeholder_');
 
 /**
+ * Map a notification `type` to the Android channel id created in the mobile app
+ * (services/notificationService.ts → ANDROID_CHANNELS). Must stay in sync.
+ */
+const channelIdForType = (type?: string): string => {
+  switch (String(type || '').toLowerCase()) {
+    case 'ride_request':
+      return 'ride-requests';
+    case 'ride_accepted':
+    case 'ride_update':
+    case 'driver_arrived':
+    case 'trip_started':
+    case 'ride_completed':
+    case 'ride_cancelled':
+      return 'ride-updates';
+    case 'message':
+    case 'chat_message':
+    case 'support_message':
+      return 'chat';
+    default:
+      return 'default';
+  }
+};
+
+/**
  * Store a new push subscription in Supabase and cache
  */
 export const storePushSubscription = async (subscription: PushSubscription) => {
@@ -209,7 +233,7 @@ export const sendPushNotification = async (
     body: string;
     data?: Record<string, any>;
     categoryId?: string;
-    type: 'ride_request' | 'ride_accepted' | 'ride_update' | 'ride_cancelled' | 'support_message' | 'payment_received' | 'security_alert' | 'remittance_due' | 'remittance_reminder';
+    type: 'ride_request' | 'ride_accepted' | 'ride_update' | 'driver_arrived' | 'trip_started' | 'ride_completed' | 'ride_cancelled' | 'support_message' | 'payment_received' | 'security_alert' | 'remittance_due' | 'remittance_reminder';
   }
 ) => {
   const results: Array<{ userId: string; success: boolean; error?: string }> = [];
@@ -311,6 +335,7 @@ export const sendPushNotification = async (
             await sendExpoNotification(pushToken, {
               ...notificationPayload,
               categoryId: payload.categoryId,
+              channelId: channelIdForType(payload.type),
             });
           }
           // For web
@@ -355,17 +380,23 @@ const sendExpoNotification = async (
     body: string;
     data: Record<string, any>;
     categoryId?: string;
+    channelId?: string;
   }
 ) => {
   try {
     const message = {
       to: expoPushToken,
       sound: 'default',
+      priority: 'high',
       title: payload.title,
       body: payload.body,
       data: payload.data,
       badge: 1,
       categoryId: payload.categoryId,
+      // Android: routes the notification to the matching channel created in the
+      // app (ride-requests / ride-updates / chat / default). Required for a
+      // heads-up banner + sound on Android 8+.
+      channelId: payload.channelId || channelIdForType(payload.data?.type),
     };
 
     const response = await fetch('https://exp.host/--/api/v2/push/send', {
