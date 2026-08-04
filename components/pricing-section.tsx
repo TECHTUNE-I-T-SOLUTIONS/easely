@@ -44,7 +44,7 @@ export function PricingSection() {
             Pricing
           </h2>
           <p className="text-muted-foreground max-w-2xl mx-auto dark:text-gray-100">
-            No hidden fees. Pay only for your seat. The more you share, the more you save.
+            No hidden fees. The more you share, the more you save.
           </p>
         </div>
 
