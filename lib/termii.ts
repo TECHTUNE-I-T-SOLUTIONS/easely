@@ -109,10 +109,17 @@ export async function sendSMS(options: TermiiSendSMSOptions) {
     throw new Error(`Invalid destination phone number: ${options.to}`)
   }
 
-  // Try the requested channel first, then fallback to alternatives
-  const channels = [options.channel || "generic"]
-  if (options.channel !== "generic") channels.push("generic")
-  if (options.channel !== "dnd") channels.push("dnd")
+  // Use generic as default since it doesn't require special configuration
+  // If user explicitly requests dnd, try it first, then fallback to generic
+  const requestedChannel = options.channel || "generic"
+  const channels = [requestedChannel]
+
+  // Add fallback channels
+  if (requestedChannel === "dnd") {
+    channels.push("generic") // Fallback from dnd to generic
+  } else if (requestedChannel === "generic") {
+    channels.push("dnd") // Try dnd as fallback if generic fails
+  }
 
   let lastError: Error | null = null
   for (const channel of channels) {
@@ -131,7 +138,11 @@ export async function sendSMS(options: TermiiSendSMSOptions) {
     } catch (error) {
       lastError = error as Error
       const errorMsg = error instanceof Error ? error.message : String(error)
-      if (errorMsg.includes("Country Inactive") || errorMsg.includes("400")) {
+      // Check for specific errors that should trigger fallback
+      if (errorMsg.includes("Route not configured") ||
+          errorMsg.includes("Country Inactive") ||
+          errorMsg.includes("400") ||
+          errorMsg.includes("422")) {
         console.log(`[Termii] ${channel} channel failed, trying next channel...`, errorMsg)
         continue
       }

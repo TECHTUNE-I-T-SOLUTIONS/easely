@@ -1,10 +1,11 @@
-import NextAuth from "next-auth";
+import NextAuth, { AuthOptions } from "next-auth";
+import type { SessionStrategy } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { supabase } from "@/lib/supabase";
 import { authSecret } from "@/lib/auth-secret";
 
-const handler = NextAuth({
+const authOptions: AuthOptions = {
   providers: [
     Credentials({
       credentials: {
@@ -78,8 +79,8 @@ const handler = NextAuth({
         token.phone = user.phone;
         token.role = user.role;
         token.email = user.email;
-        token.profilePictureUrl = user.profilePictureUrl;
-        token.profileComplete = user.profileComplete;
+        token.profilePictureUrl = token.profilePictureUrl;
+        token.profileComplete = token.profileComplete;
         token.createdAt = user.createdAt;
         token.status = user.status;
       }
@@ -105,10 +106,13 @@ const handler = NextAuth({
     error: "/auth/login",
   },
   session: {
-    strategy: "jwt",
+    strategy: "jwt" as SessionStrategy,
     maxAge: 30 * 24 * 60 * 60,
   },
   secret: authSecret,
-});
+};
+
+const handler = NextAuth(authOptions);
 
 export { handler as GET, handler as POST };
+export { authOptions };

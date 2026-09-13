@@ -137,13 +137,26 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Send push notification to all drivers
+      // Send push notification to all drivers with rich features
       try {
         await sendPushNotification(driverUserIds, {
           title: "🚗 New Ride Request",
-          body: `Pickup: ${pickup_description || pickup_zone}`,
+          body: `Pickup: ${pickup_description || pickup_zone} | Dropoff: ${destination_description || destination_zone} | Fare: ₦${parsedFare.toLocaleString()}`,
           type: "ride_request",
           categoryId: "ride_request_action",
+          imageUrl: "https://example.com/ride-request-icon.png", // Replace with actual image URL
+          actions: [
+            {
+              id: "accept_ride",
+              title: "Accept",
+              action: "accept",
+            },
+            {
+              id: "reject_ride",
+              title: "Reject",
+              action: "reject",
+            },
+          ],
           data: {
             rideId: ride.id,
             pickup: pickup_description || pickup_zone,
@@ -151,10 +164,10 @@ export async function POST(request: NextRequest) {
             fare: parsedFare,
             distance: parsedDistance,
             deeplink: `/driver/ride-details?rideId=${ride.id}`,
-            actions: ["accept", "reject"],
+            action: "accept_ride",
           },
         });
-        console.log("[RideDispatch] Push notification sent to drivers", {
+        console.log("[RideDispatch] Rich push notification sent to drivers", {
           rideId: ride.id,
           driverCount: driverUserIds.length,
         });

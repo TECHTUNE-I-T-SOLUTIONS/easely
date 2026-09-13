@@ -199,6 +199,81 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Award random cashback reward after first ride completion (1-5% discount)
+    if (status === "completed") {
+      try {
+        // Check if this is the rider's first completed ride
+        const { data: userStats, error: statsError } = await supabaseAdmin!
+          .from("user_cashback_stats")
+          .select("total_rides_completed, first_ride_bonus_earned")
+          .eq("user_id", updatedRide.rider_id)
+          .single()
+
+        if (!statsError && userStats && userStats.total_rides_completed === 1 && !userStats.first_ride_bonus_earned) {
+          // Get the first ride bonus program
+          const { data: firstRideProgram } = await supabaseAdmin!
+            .from("cashback_programs")
+            .select("*")
+            .eq("program_type", "first_ride")
+            .eq("is_active", true)
+            .single()
+
+          if (firstRideProgram) {
+            // Randomly determine discount percentage (1-5%)
+            const randomDiscount = Math.floor(Math.random() * 5) + 1; // 1-5%
+
+            const { error: rewardError } = await supabaseAdmin!
+              .from("user_cashback_rewards")
+              .insert({
+                user_id: updatedRide.rider_id,
+                program_id: firstRideProgram.id,
+                ride_id: updatedRide.id,
+                discount_percentage: randomDiscount,
+                discount_amount: 0, // Will be calculated when used
+                original_fare_amount: 0,
+                final_fare_amount: 0,
+                status: "earned",
+                earned_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + (firstRideProgram.expiry_days || 30) * 24 * 60 * 60 * 1000).toISOString(),
+                metadata: {
+                  source: 'first_ride_bonus',
+                  related_ride_id: updatedRide.id,
+                  random_discount: true,
+                },
+              })
+
+            if (!rewardError) {
+              console.log("[UpdateRideStatus] First ride bonus awarded to user:", updatedRide.rider_id, "Discount:", randomDiscount + "%")
+
+              // Mark as earned in stats
+              await supabaseAdmin!
+                .from("user_cashback_stats")
+                .update({
+                  first_ride_bonus_earned: true,
+                  updated_at: new Date().toISOString()
+                })
+                .eq("user_id", updatedRide.rider_id)
+
+              // Send notification about the won reward
+              await sendPushNotification([updatedRide.rider_id], {
+                title: "� Congratulations!",
+                body: `You won ${randomDiscount}% off your next ride! Use it before it expires.`,
+                type: "cashback",
+                categoryId: "cashback",
+                data: {
+                  deeplink: "/rider/cashback",
+                  discount_percentage: randomDiscount
+                }
+              })
+            }
+          }
+        }
+      } catch (cashbackError) {
+        console.error("[UpdateRideStatus] Failed to award cashback:", cashbackError)
+        // Don't fail the ride update if cashback fails
+      }
+    }
+
     if (status === "completed") {
       try {
         const completedDistanceKm = Number(updatedRide.distance_km || ride.distance_km || 0)

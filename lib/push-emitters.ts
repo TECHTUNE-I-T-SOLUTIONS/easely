@@ -13,12 +13,14 @@ export async function emitRideRequest(
   pickupLocation: string,
   dropoffLocation: string,
   fare: number,
-  estimatedDistance: number
+  estimatedDistance: number,
+  originalFare?: number,
+  cashbackDiscount?: number
 ) {
   try {
     const payload = {
       title: "🚗 New Ride Request",
-      body: `${pickupLocation} → ${dropoffLocation} (₦${fare})`,
+      body: `${pickupLocation} → ${dropoffLocation} (₦${fare}${cashbackDiscount && cashbackDiscount > 0 ? ` - ₦${cashbackDiscount} cashback` : ''})`,
       type: "ride_request" as const,
        categoryId: "ride_request_action",
       data: {
@@ -26,6 +28,8 @@ export async function emitRideRequest(
         pickup: pickupLocation,
         dropoff: dropoffLocation,
         fare,
+        originalFare: originalFare || fare,
+        cashbackDiscount: cashbackDiscount || 0,
         distance: estimatedDistance.toString(),
         action: "ride_request_notification",
          actions: ["accept", "reject"],

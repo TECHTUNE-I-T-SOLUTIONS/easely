@@ -5,7 +5,7 @@ import { getSessionFromRequest } from "@/lib/auth"
 export async function GET(request: NextRequest) {
   try {
     console.log("🔵 [RIDE-HISTORY] Received request")
-    console.log("📋 [RIDE-HISTORY] Headers:", Object.fromEntries(request.headers))
+    // console.log("📋 [RIDE-HISTORY] Headers:", Object.fromEntries(request.headers))
     
     // Try NextAuth session first (for web app)
     let session = await getSessionFromRequest(request)

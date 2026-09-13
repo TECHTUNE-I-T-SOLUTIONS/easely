@@ -6,6 +6,7 @@ import { notifyAdmins } from "@/lib/admin-notifications"
 import { emitRideRequest, emitRideUpdate } from "@/lib/push-emitters"
 import { sendRideRequestSMS, toTermiiPhoneNumber } from "@/lib/termii"
 import { sendPushNotification } from "@/lib/push-service"
+import { sendCashbackUsedNotification } from "@/lib/cashback-notifications"
 
 export async function POST(request: NextRequest) {
   try {
@@ -26,6 +27,7 @@ export async function POST(request: NextRequest) {
       platform_fee,
       driver_earnings,
       seats_available,
+      cashback_reward_id, // Optional: ID of cashback reward to use
     } = body
 
     if (!pickup_location || !dropoff_location || !estimated_distance || !number_of_seats || !pickup_time) {
@@ -81,7 +83,75 @@ export async function POST(request: NextRequest) {
 
     // Calculate fare: N600 per kilometer (if not provided)
     const base_fare_per_km = 600
-    const final_fare_amount = fare_amount || estimated_distance * base_fare_per_km
+    let final_fare_amount = fare_amount || estimated_distance * base_fare_per_km
+    let original_fare_amount = final_fare_amount
+    let applied_cashback_reward_id: string | null = null
+    let cashback_discount_amount = 0
+
+    // Handle cashback reward if provided
+    if (cashback_reward_id) {
+      try {
+        // Fetch the cashback reward
+        const { data: cashbackReward, error: cashbackError } = await supabaseAdmin
+          .from("user_cashback_rewards")
+          .select(`
+            *,
+            cashback_programs (
+              max_discount_amount,
+              min_order_amount
+            )
+          `)
+          .eq("id", cashback_reward_id)
+          .eq("user_id", session.user.id)
+          .eq("status", "earned")
+          .single()
+
+        if (cashbackError || !cashbackReward) {
+          console.error("[BookRide] Invalid or expired cashback reward:", cashbackError)
+          return NextResponse.json({ error: "Invalid or expired cashback reward" }, { status: 400 })
+        }
+
+        // Check if reward is expired
+        if (cashbackReward.expires_at && new Date(cashbackReward.expires_at) < new Date()) {
+          console.error("[BookRide] Cashback reward has expired")
+          return NextResponse.json({ error: "Cashback reward has expired" }, { status: 400 })
+        }
+
+        // Check minimum order amount
+        const minOrderAmount = cashbackReward.cashback_programs?.min_order_amount || 0
+        if (final_fare_amount < minOrderAmount) {
+          console.error("[BookRide] Fare below minimum order amount for cashback")
+          return NextResponse.json({
+            error: `Minimum order amount of ₦${minOrderAmount.toLocaleString()} required for this cashback reward`
+          }, { status: 400 })
+        }
+
+        // Calculate discount amount
+        const discountPercentage = cashbackReward.discount_percentage
+        const maxDiscountAmount = cashbackReward.cashback_programs?.max_discount_amount || Infinity
+        cashback_discount_amount = (final_fare_amount * discountPercentage) / 100
+
+        // Cap discount at max amount
+        if (cashback_discount_amount > maxDiscountAmount) {
+          cashback_discount_amount = maxDiscountAmount
+        }
+
+        // Apply discount to fare
+        final_fare_amount = final_fare_amount - cashback_discount_amount
+        applied_cashback_reward_id = cashback_reward_id
+
+        console.log("[BookRide] Cashback discount applied:", {
+          originalFare: original_fare_amount,
+          discountPercentage,
+          discountAmount: cashback_discount_amount,
+          finalFare: final_fare_amount,
+        })
+      } catch (error) {
+        console.error("[BookRide] Error applying cashback:", error)
+        // Continue without cashback if there's an error
+      }
+    }
+
     const final_platform_fee = platform_fee || final_fare_amount * 0.15
     const final_driver_earnings = driver_earnings || final_fare_amount - final_platform_fee
 
@@ -112,11 +182,44 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
 
+    // Mark cashback reward as used if one was applied
+    if (applied_cashback_reward_id) {
+      try {
+        const { error: updateError } = await supabaseAdmin
+          .from("user_cashback_rewards")
+          .update({
+            status: "used",
+            used_at: new Date().toISOString(),
+            ride_id: ride.id,
+            original_fare_amount: original_fare_amount,
+            final_fare_amount: final_fare_amount,
+            discount_amount: cashback_discount_amount,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", applied_cashback_reward_id)
+
+        if (updateError) {
+          console.error("[BookRide] Failed to mark cashback reward as used:", updateError)
+        } else {
+          console.log("[BookRide] Cashback reward marked as used:", applied_cashback_reward_id)
+
+          // Send notification about cashback usage
+          await sendCashbackUsedNotification(session.user.id, {
+            id: applied_cashback_reward_id,
+            discount_percentage: (cashback_discount_amount / original_fare_amount) * 100,
+            discount_amount: cashback_discount_amount,
+          })
+        }
+      } catch (error) {
+        console.error("[BookRide] Error updating cashback reward:", error)
+      }
+    }
+
     await notifyAdmins({
       allAdmins: true,
       department: "ops",
       title: "New ride requested",
-      body: `${session.user.firstName || "A rider"} requested a ride from ${pickup_location.address} to ${dropoff_location.address}.`,
+      body: `${session.user.firstName || "A rider"} requested a ride from ${pickup_location.address} to ${dropoff_location.address}.${cashback_discount_amount > 0 ? ` Cashback discount applied: ₦${cashback_discount_amount.toLocaleString()}` : ''}`,
       type: "ride_requested",
       actionUrl: `/admin/rides?ride=${ride.id}`,
       metadata: {
@@ -151,7 +254,9 @@ export async function POST(request: NextRequest) {
       pickupZone,
       destinationZone,
       Number(final_fare_amount || 0),
-      Number(estimated_distance || 0)
+      Number(estimated_distance || 0),
+      Number(original_fare_amount || 0),
+      Number(cashback_discount_amount || 0)
     )
 
     await emitRideUpdate(
@@ -322,13 +427,13 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      console.log("[RideDispatch] Online drivers SMS dispatch summary", {
-        rideId: ride.id,
-        attempted: smsTasks.length,
-        successful: smsSuccessCount,
-        failed: smsFailureCount,
-        totalOnlineDrivers: drivers.length,
-      })
+      // console.log("[RideDispatch] Online drivers SMS dispatch summary", {
+      //   rideId: ride.id,
+      //   attempted: smsTasks.length,
+      //   successful: smsSuccessCount,
+      //   failed: smsFailureCount,
+      //   totalOnlineDrivers: drivers.length,
+      // })
 
       await supabaseAdmin
         .from("rides")

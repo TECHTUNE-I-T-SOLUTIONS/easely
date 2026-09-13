@@ -225,6 +225,7 @@ export const getUserActiveSubscriptions = (userId: string): PushSubscription[] =
 /**
  * Send push notification to specific users
  * Only sends to users with valid (non-placeholder) tokens
+ * Enhanced to support rich notifications with images and action buttons
  */
 export const sendPushNotification = async (
   userIds: string[],
@@ -233,7 +234,9 @@ export const sendPushNotification = async (
     body: string;
     data?: Record<string, any>;
     categoryId?: string;
-    type: 'ride_request' | 'ride_accepted' | 'ride_update' | 'driver_arrived' | 'trip_started' | 'ride_completed' | 'ride_cancelled' | 'support_message' | 'payment_received' | 'security_alert' | 'remittance_due' | 'remittance_reminder';
+    type: 'ride_request' | 'ride_accepted' | 'ride_update' | 'driver_arrived' | 'trip_started' | 'ride_completed' | 'ride_cancelled' | 'support_message' | 'payment_received' | 'security_alert' | 'remittance_due' | 'remittance_reminder' | 'cashback';
+    imageUrl?: string;
+    actions?: Array<{ id: string; title: string; action: string }>;
   }
 ) => {
   const results: Array<{ userId: string; success: boolean; error?: string }> = [];
@@ -336,6 +339,8 @@ export const sendPushNotification = async (
               ...notificationPayload,
               categoryId: payload.categoryId,
               channelId: channelIdForType(payload.type),
+              imageUrl: payload.imageUrl,
+              actions: payload.actions,
             });
           }
           // For web
@@ -372,6 +377,7 @@ export const sendPushNotification = async (
 /**
  * Send Expo notification (for mobile app)
  * Handles errors gracefully and logs detailed information
+ * Enhanced to support rich notifications with images and action buttons
  */
 const sendExpoNotification = async (
   expoPushToken: string,
@@ -381,10 +387,12 @@ const sendExpoNotification = async (
     data: Record<string, any>;
     categoryId?: string;
     channelId?: string;
+    imageUrl?: string;
+    actions?: Array<{ id: string; title: string; action: string }>;
   }
 ) => {
   try {
-    const message = {
+    const message: any = {
       to: expoPushToken,
       sound: 'default',
       priority: 'high',
@@ -398,6 +406,29 @@ const sendExpoNotification = async (
       // heads-up banner + sound on Android 8+.
       channelId: payload.channelId || channelIdForType(payload.data?.type),
     };
+
+    // Add image for rich notifications
+    if (payload.imageUrl) {
+      message.imageUrl = payload.imageUrl;
+    }
+
+    // Add action buttons for interactive notifications
+    if (payload.actions && payload.actions.length > 0) {
+      // Android actions
+      message.android = {
+        channelId: payload.channelId || channelIdForType(payload.data?.type),
+        actions: payload.actions.map(action => ({
+          action: action.action,
+          title: action.title,
+          icon: '/android-icon.png', // Optional icon for action button
+        })),
+      };
+      
+      // iOS actions
+      message.ios = {
+        categoryId: payload.categoryId || 'ride-requests',
+      };
+    }
 
     const response = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
