@@ -101,15 +101,23 @@ Payment and policy facts:
 - For safety, SOS, harassment, fraud, account access, refunds/remittance disputes, verification approval, or driver discipline, Dapo should collect the key details and escalate to human CRM support.
 `
 
+// Gemini model IDs — ordered newest/fastest Flash first for low-latency chat,
+// falling back to older stable models, then Pro as last Gemini resort.
+// OpenAI is the final fallback if all Gemini models fail (see tryOpenAI below).
 const GEMINI_MODELS = [
+  "gemini-3.8-flash",          // Newest Flash — primary
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
   "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
   "gemini-3.1-flash-lite",
   "gemini-3-flash-preview",
-  "gemini-2.5-pro",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
-  "gemini-2.5-flash-lite-preview-09-2025",
+  "gemini-2.5-pro",            // Most capable — slowest, last Gemini Flash/Pro resort
+  "gemma-4-9b-it",             // Gemma 4 (open weights, via Gemini API) — final fallback
 ]
+
 
 function isVagueSupportMessage(message: string) {
   const normalized = message.trim().toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "")
@@ -409,6 +417,61 @@ function parseJson(text: string): any {
   return JSON.parse(match ? match[0] : cleaned)
 }
 
+async function tryOpenAI(prompt: string): Promise<SupportAIResult | null> {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) return null
+
+  const OPENAI_MODELS = ["gpt-4o-mini", "gpt-4o"]
+
+  for (const model of OPENAI_MODELS) {
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: "You are Dapo, Charter Keke customer support AI. Always respond with valid JSON only, matching the schema exactly." },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.25,
+          max_tokens: 700,
+          response_format: { type: "json_object" },
+        }),
+      })
+
+      if (!response.ok) continue
+
+      const payload = await response.json()
+      const text = payload?.choices?.[0]?.message?.content?.trim()
+      if (!text) continue
+
+      const parsed = parseJson(text)
+      const reply = String(parsed.reply || "").trim()
+      if (!reply) continue
+
+      return {
+        ok: true,
+        model: `openai/${model}`,
+        reply,
+        shouldEscalate: parsed.shouldEscalate !== false,
+        shouldResolve: parsed.shouldResolve === true,
+        confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.5))),
+        category: String(parsed.category || "other"),
+        department: String(parsed.department || "support"),
+        reason: String(parsed.reason || "OpenAI fallback response"),
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return null
+}
+
 export async function generateSupportAIReply(input: SupportAIInput): Promise<SupportAIResult> {
   const remittanceReply = buildRoleAwareRemittanceReply(input)
   if (remittanceReply) return remittanceReply
@@ -553,67 +616,75 @@ export async function generateSupportAIReply(input: SupportAIInput): Promise<Sup
     }
   }
 
-  const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) {
-    return { ok: false, shouldEscalate: true, confidence: 0, reason: "Gemini API key not configured" }
-  }
-
+  const geminiKey = process.env.GEMINI_API_KEY
   const prompt = supportPrompt(input)
   let lastError = ""
 
-  for (const model of GEMINI_MODELS) {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.25,
-              topP: 0.8,
-              maxOutputTokens: 700,
-              responseMimeType: "application/json",
-            },
-          }),
+  // 1. Try Gemini models in order (fastest first)
+  if (geminiKey) {
+    for (const model of GEMINI_MODELS) {
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.25,
+                topP: 0.8,
+                maxOutputTokens: 700,
+                responseMimeType: "application/json",
+              },
+            }),
+          }
+        )
+
+        if (!response.ok) {
+          lastError = `gemini/${model}: ${response.status} ${await response.text().catch(() => "")}`
+          continue
         }
-      )
 
-      if (!response.ok) {
-        lastError = `${model}: ${response.status} ${await response.text().catch(() => "")}`
-        continue
-      }
+        const payload = await response.json()
+        const text = payload?.candidates?.[0]?.content?.parts?.map((part: any) => part?.text || "").join("\n").trim()
+        if (!text) {
+          lastError = `gemini/${model}: empty response`
+          continue
+        }
 
-      const payload = await response.json()
-      const text = payload?.candidates?.[0]?.content?.parts?.map((part: any) => part?.text || "").join("\n").trim()
-      if (!text) {
-        lastError = `${model}: empty response`
-        continue
-      }
+        const parsed = parseJson(text)
+        const reply = String(parsed.reply || "").trim()
+        if (!reply) {
+          lastError = `gemini/${model}: missing reply`
+          continue
+        }
 
-      const parsed = parseJson(text)
-      const reply = String(parsed.reply || "").trim()
-      if (!reply) {
-        lastError = `${model}: missing reply`
-        continue
+        return {
+          ok: true,
+          model: `gemini/${model}`,
+          reply,
+          shouldEscalate: parsed.shouldEscalate !== false,
+          shouldResolve: parsed.shouldResolve === true,
+          confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.5))),
+          category: String(parsed.category || "other"),
+          department: String(parsed.department || "support"),
+          reason: String(parsed.reason || "Gemini AI support response"),
+        }
+      } catch (error) {
+        lastError = `gemini/${model}: ${error instanceof Error ? error.message : String(error)}`
       }
-
-      return {
-        ok: true,
-        model,
-        reply,
-        shouldEscalate: parsed.shouldEscalate !== false,
-        shouldResolve: parsed.shouldResolve === true,
-        confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.5))),
-        category: String(parsed.category || "other"),
-        department: String(parsed.department || "support"),
-        reason: String(parsed.reason || "AI support response"),
-      }
-    } catch (error) {
-      lastError = `${model}: ${error instanceof Error ? error.message : String(error)}`
     }
+  } else {
+    lastError = "GEMINI_API_KEY not configured"
   }
 
-  return { ok: false, shouldEscalate: true, confidence: 0, reason: lastError || "All Gemini models failed" }
+  // 2. Fallback to OpenAI if all Gemini models failed
+  console.warn(`[AI] All Gemini models failed (${lastError}), falling back to OpenAI`)
+  const openaiResult = await tryOpenAI(prompt)
+  if (openaiResult) return openaiResult
+
+  // 3. Everything failed — escalate to human support
+  console.error(`[AI] All AI providers failed. Last error: ${lastError}`)
+  return { ok: false, shouldEscalate: true, confidence: 0, reason: lastError || "All AI providers failed" }
 }

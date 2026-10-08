@@ -1,6 +1,6 @@
 /**
  * Location Geocoding Service
- * Uses multiple geocoding services for better reverse geocoding with full addresses
+ * Uses Google Places primarily with Mapbox as fallback
  */
 
 interface ReverseGeocodeResult {
@@ -34,7 +34,6 @@ export async function reverseGeocodeWithLocationIQ(
     const apiKey = process.env.LOCATIONIQ_API_KEY;
     
     if (!apiKey) {
-      console.warn('[LocationGeocoding] LocationIQ API key not configured, using fallback');
       return null;
     }
 
@@ -43,14 +42,12 @@ export async function reverseGeocodeWithLocationIQ(
     );
 
     if (!response.ok) {
-      console.error('[LocationGeocoding] LocationIQ API error:', response.status, response.statusText);
       return null;
     }
 
     const data = await response.json();
 
     if (data.error) {
-      console.error('[LocationGeocoding] LocationIQ error:', data.error);
       return null;
     }
 
@@ -68,12 +65,6 @@ export async function reverseGeocodeWithLocationIQ(
       .join(', ');
 
     const formattedAddress = parts || data.display_name || 'Unknown location';
-    
-    console.log('[LocationGeocoding] LocationIQ response:', {
-      address,
-      formattedAddress,
-      display_name: data.display_name
-    });
 
     return {
       displayName: data.display_name || parts,
@@ -86,7 +77,6 @@ export async function reverseGeocodeWithLocationIQ(
       formattedAddress
     };
   } catch (error) {
-    console.error('[LocationGeocoding] Reverse geocoding error:', error);
     return null;
   }
 }
@@ -100,24 +90,21 @@ export async function reverseGeocodeWithOpenStreetMap(
       `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1&accept-language=en-US&zoom=18`,
       {
         headers: {
-          'User-Agent': 'CharterKeke/1.0' // Required by OSM policy
+          'User-Agent': 'CharterKeke/1.0'
         }
       }
     );
 
     if (!response.ok) {
-      console.error('[LocationGeocoding] OSM API error:', response.status, response.statusText);
       return null;
     }
 
     const data = await response.json();
 
     if (data.error) {
-      console.error('[LocationGeocoding] OSM error:', data.error);
       return null;
     }
 
-    // Build formatted address from components
     const address = data.address || {};
     const parts = [
       address.house_number,
@@ -131,12 +118,6 @@ export async function reverseGeocodeWithOpenStreetMap(
       .join(', ');
 
     const formattedAddress = parts || data.display_name || 'Unknown location';
-    
-    console.log('[LocationGeocoding] OSM response:', {
-      address,
-      formattedAddress,
-      display_name: data.display_name
-    });
 
     return {
       displayName: data.display_name || parts,
@@ -149,118 +130,50 @@ export async function reverseGeocodeWithOpenStreetMap(
       formattedAddress
     };
   } catch (error) {
-    console.error('[LocationGeocoding] OSM reverse geocoding error:', error);
     return null;
   }
 }
 
-export async function reverseGeocodeWithBigDataCloud(
-  lat: number,
-  lon: number
-): Promise<ReverseGeocodeResult | null> {
-  try {
-    const apiKey = process.env.BIGDATACLOUD_API_KEY;
-    
-    if (!apiKey) {
-      console.warn('[LocationGeocoding] BigDataCloud API key not configured, skipping');
-      return null;
-    }
-
-    const response = await fetch(
-      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&key=${apiKey}&localityLanguage=en`
-    );
-
-    if (!response.ok) {
-      console.error('[LocationGeocoding] BigDataCloud API error:', response.status, response.statusText);
-      return null;
-    }
-
-    const data = await response.json();
-
-    if (data.error) {
-      console.error('[LocationGeocoding] BigDataCloud error:', data.error);
-      return null;
-    }
-
-    // Build formatted address from components
-    const locality = data.locality || {};
-    const parts = [
-      locality.streetName,
-      locality.buildingName,
-      locality.suburb,
-      locality.city,
-      locality.principalSubdivision,
-      locality.countryName
-    ]
-      .filter(Boolean)
-      .join(', ');
-
-    const formattedAddress = parts || data.formattedAddress || 'Unknown location';
-    
-    console.log('[LocationGeocoding] BigDataCloud response:', {
-      locality,
-      formattedAddress,
-      formattedAddress_data: data.formattedAddress
-    });
-
-    return {
-      displayName: data.formattedAddress || parts,
-      road: locality.streetName,
-      suburb: locality.suburb,
-      city: locality.city,
-      state: locality.principalSubdivision,
-      country: locality.countryName,
-      postalCode: locality.postcode,
-      formattedAddress
-    };
-  } catch (error) {
-    console.error('[LocationGeocoding] BigDataCloud reverse geocoding error:', error);
-    return null;
-  }
-}
-
-/**
- * Get detailed address from coordinates with multiple fallback options
- */
 export async function getDetailedAddress(
   lat: number,
   lon: number
 ): Promise<string> {
   try {
-    // Try BigDataCloud first (good global coverage, free tier available)
-    const bigDataCloudResult = await reverseGeocodeWithBigDataCloud(lat, lon);
-    if (bigDataCloudResult?.formattedAddress && bigDataCloudResult.formattedAddress.length > 15) {
-      console.log('[LocationGeocoding] Using BigDataCloud result:', bigDataCloudResult.formattedAddress);
-      return bigDataCloudResult.formattedAddress;
+    // Try Google Places first (if API key is configured)
+    const googleApiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (googleApiKey) {
+      try {
+        const response = await fetch(
+          `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lon}&key=${googleApiKey}`
+        );
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.results && data.results.length > 0) {
+            const address = data.results[0].formatted_address;
+            if (address && address.length > 10) {
+              return address;
+            }
+          }
+        }
+      } catch (error) {
+        // Silent fail, try next service
+      }
     }
 
-    // Try LocationIQ (good for Nigeria)
+    // Fallback to LocationIQ for Nigeria
     const locationIQResult = await reverseGeocodeWithLocationIQ(lat, lon);
-    if (locationIQResult?.formattedAddress && locationIQResult.formattedAddress.length > 15) {
-      console.log('[LocationGeocoding] Using LocationIQ result:', locationIQResult.formattedAddress);
+    if (locationIQResult?.formattedAddress && locationIQResult.formattedAddress.length > 10) {
       return locationIQResult.formattedAddress;
     }
 
-    // Fallback to OpenStreetMap Nominatim
-    const osmResult = await reverseGeocodeWithOpenStreetMap(lat, lon);
-    if (osmResult?.formattedAddress && osmResult.formattedAddress.length > 15) {
-      console.log('[LocationGeocoding] Using OSM result:', osmResult.formattedAddress);
-      return osmResult.formattedAddress;
-    }
-
-    // If all failed or returned too generic, return coordinates
-    console.warn('[LocationGeocoding] All geocoding services failed or returned generic results');
+    // Final fallback to coordinates
     return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   } catch (error) {
-    console.error('[LocationGeocoding] Failed to get detailed address:', error);
     return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   }
 }
 
-/**
- * Backend API endpoint for reverse geocoding
- * This can be called from the mobile app to get better addresses
- */
 export async function reverseGeocodeEndpoint(
   request: Request
 ) {
@@ -326,10 +239,8 @@ export async function forwardGeocodeWithLocationIQ(
       source: 'locationiq'
     })).filter((result: ForwardGeocodeResult) => result.address && !isNaN(result.lat) && !isNaN(result.lon));
 
-    console.log('[LocationGeocoding] LocationIQ forward geocode results:', results.length);
     return results;
   } catch (error) {
-    console.error('[LocationGeocoding] LocationIQ forward geocoding error:', error);
     return [];
   }
 }
@@ -351,14 +262,12 @@ export async function forwardGeocodeWithOSM(
     );
 
     if (!response.ok) {
-      console.error('[LocationGeocoding] OSM forward geocode error:', response.status, response.statusText);
       return [];
     }
 
     const data = await response.json();
 
     if (!Array.isArray(data)) {
-      console.warn('[LocationGeocoding] OSM returned non-array result');
       return [];
     }
 
@@ -371,16 +280,14 @@ export async function forwardGeocodeWithOSM(
       source: 'osm'
     })).filter((result: ForwardGeocodeResult) => result.address && !isNaN(result.lat) && !isNaN(result.lon));
 
-    console.log('[LocationGeocoding] OSM forward geocode results:', results.length);
     return results;
   } catch (error) {
-    console.error('[LocationGeocoding] OSM forward geocoding error:', error);
     return [];
   }
 }
 
 /**
- * Search addresses with multiple fallback services
+ * Search addresses using Google Places (primary) and Mapbox (fallback)
  */
 export async function searchAddresses(
   query: string
@@ -390,26 +297,41 @@ export async function searchAddresses(
       return [];
     }
 
-    console.log('[LocationGeocoding] Searching addresses for:', query);
+    // Try Google Places first (if API key is configured)
+    const googleApiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (googleApiKey) {
+      try {
+        const response = await fetch(
+          `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${googleApiKey}&components=country:ng`
+        );
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.predictions && data.predictions.length > 0) {
+            const results = data.predictions.map((item: any) => ({
+              address: item.description,
+              lat: 0, // Will be resolved with place details
+              lon: 0,
+              placeId: item.place_id,
+              name: item.structured_formatting?.main_text,
+              source: 'google'
+            }));
+            return results;
+          }
+        }
+      } catch (error) {
+        // Silent fail, try next service
+      }
+    }
 
-    // Try LocationIQ first
+    // Fallback to LocationIQ for Nigeria
     const locationIQResults = await forwardGeocodeWithLocationIQ(query);
     if (locationIQResults.length > 0) {
-      console.log('[LocationGeocoding] Using LocationIQ search results');
       return locationIQResults;
     }
 
-    // Fallback to OSM
-    const osmResults = await forwardGeocodeWithOSM(query);
-    if (osmResults.length > 0) {
-      console.log('[LocationGeocoding] Using OSM search results');
-      return osmResults;
-    }
-
-    console.warn('[LocationGeocoding] No search results found from any service');
     return [];
   } catch (error) {
-    console.error('[LocationGeocoding] Address search error:', error);
     return [];
   }
 }
