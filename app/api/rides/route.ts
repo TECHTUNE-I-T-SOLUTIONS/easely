@@ -39,6 +39,24 @@ export async function POST(request: NextRequest) {
       ? Number(estimated_distance)
       : 0;
 
+    // Check for pending cancellation penalty
+    let penaltyAmount = 0;
+    try {
+      const { data: userData } = await supabaseAdmin!
+        .from("users")
+        .select("pending_cancellation_penalty")
+        .eq("id", session.user.id)
+        .single();
+        
+      if (userData?.pending_cancellation_penalty) {
+        penaltyAmount = Number(userData.pending_cancellation_penalty);
+      }
+    } catch (e) {
+      console.error("[RideDispatch] Error fetching penalty:", e);
+    }
+    
+    const finalFare = parsedFare + penaltyAmount;
+
     // Create ride
     const { data: ride, error: rideError } = await supabaseAdmin!
       .from("rides")
@@ -50,8 +68,8 @@ export async function POST(request: NextRequest) {
           destination_zone,
           destination_description,
           ride_type,
-          fare: parsedFare,
-          estimated_distance: parsedDistance,
+          fare_amount: finalFare,
+          distance_km: parsedDistance,
           status: "pending",
         },
       ])

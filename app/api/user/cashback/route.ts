@@ -173,8 +173,8 @@ export async function POST(request: NextRequest) {
         }, { status: 404 })
       }
 
-      // Randomly determine discount percentage (1-5%)
-      const randomDiscount = Math.floor(Math.random() * 5) + 1; // 1-5%
+      // Fixed 10% for the first ride bonus
+      const randomDiscount = 10;
 
       const { data: newReward, error: rewardError } = await supabaseAdmin!
         .from("user_cashback_rewards")
