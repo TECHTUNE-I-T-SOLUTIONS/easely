@@ -60,7 +60,7 @@
     "next-auth": "^4.24.13",
     "next-cloudinary": "^5.0.0",
     "next-themes": "latest",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^7.0.7",
     "pdfkit": "^0.18.0",
     "react": "19.2.0",
     "react-day-picker": "9.8.0",
