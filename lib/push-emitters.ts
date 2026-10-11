@@ -33,6 +33,7 @@ export async function emitRideRequest(
         distance: estimatedDistance.toString(),
         action: "ride_request_notification",
          actions: ["accept", "reject"],
+        deeplink: "/driver/ride-details",
       },
     };
 
@@ -74,6 +75,7 @@ export async function emitRideAccepted(
         fare: fare?.toString() || "0",
         estimatedArrival: estimatedArrival.toString(),
         action: "ride_accepted_notification",
+        deeplink: "/rider/active-ride",
       },
     };
 
@@ -87,6 +89,7 @@ export async function emitRideAccepted(
         pickup,
         dropoff,
         fare: fare?.toString() || "0",
+        deeplink: "/driver/ride-details",
       },
     };
 
@@ -207,6 +210,7 @@ export async function emitRideCompleted(
         fare: fare.toString(),
         rating: rating?.toString() || "0",
         action: "ride_completed_notification",
+        deeplink: "/rider/active-ride",
       },
     };
 
@@ -218,6 +222,7 @@ export async function emitRideCompleted(
         rideId,
         fare: fare.toString(),
         action: "driver_ride_completed_notification",
+        deeplink: "/driver/ride-details",
       },
     };
 

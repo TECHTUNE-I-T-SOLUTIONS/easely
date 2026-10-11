@@ -137,16 +137,18 @@ export async function POST(request: NextRequest) {
 
     // Ensure required fields exist for settlement calculation
     if (status === "completed") {
-      // Set default values if not already set to ensure trigger can process settlement
-      const fare = ride.fare_amount || 0;
-      const platformFee = ride.platform_fee || Math.round(fare * 0.1); // 10% default
+      // Calculate fare if not set (using same logic as book-ride: 600 per km)
+      const distanceKm = ride.distance_km || 0;
+      const fare = ride.fare_amount || (distanceKm * 600);
+      const platformFee = ride.platform_fee || Math.round(fare * 0.15); // 15% default
       const driverEarnings = ride.driver_earnings || (fare - platformFee);
-      
+
       console.log("[UpdateRideStatus] Ride completion settlement data", {
         rideId,
         fare,
         platformFee,
         driverEarnings,
+        distanceKm,
       });
     }
 
@@ -176,12 +178,14 @@ export async function POST(request: NextRequest) {
       }
 
       // Ensure settlement fields are set so trigger can use them (if any completion logic needed)
-      if (!ride.fare_amount) updateData.fare_amount = 0;
-      if (!ride.platform_fee) updateData.platform_fee = 0;
-      if (!ride.driver_earnings) updateData.driver_earnings = 0;
-      if (!ride.fare_amount) updateData.fare_amount = 0;
-      if (!ride.platform_fee) updateData.platform_fee = 0;
-      if (!ride.driver_earnings) updateData.driver_earnings = 0;
+      const distanceKm = ride.distance_km || 0;
+      const calculatedFare = distanceKm * 600;
+      const calculatedPlatformFee = Math.round(calculatedFare * 0.15);
+      const calculatedDriverEarnings = calculatedFare - calculatedPlatformFee;
+
+      if (!ride.fare_amount) updateData.fare_amount = calculatedFare;
+      if (!ride.platform_fee) updateData.platform_fee = calculatedPlatformFee;
+      if (!ride.driver_earnings) updateData.driver_earnings = calculatedDriverEarnings;
     }
 
     const { data: updatedRide, error: updateError } = await supabaseAdmin!
