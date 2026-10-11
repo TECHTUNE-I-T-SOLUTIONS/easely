@@ -47,10 +47,18 @@ export async function GET(request: NextRequest) {
     for (const ride of activeRides) {
       try {
         // Get driver's last known location
+        const driverUser = Array.isArray(ride.drivers) ? ride.drivers[0] : ride.drivers
+        const driverUserId = driverUser?.user_id
+
+        if (!driverUserId) {
+          console.log(`[LiveTrackingPoll] No driver user_id for ride ${ride.id}`)
+          continue
+        }
+
         const { data: driver } = await supabaseAdmin
           .from("drivers")
           .select("last_known_location")
-          .eq("user_id", ride.drivers.user_id)
+          .eq("user_id", driverUserId)
           .single()
 
         if (!driver?.last_known_location) {
