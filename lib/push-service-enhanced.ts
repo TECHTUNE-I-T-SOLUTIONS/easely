@@ -69,13 +69,46 @@ function generateMapImageUrl(data: LiveTrackingNotificationData): string {
 }
 
 /**
+ * Get tracking image URL based on distance to destination
+ * Returns the appropriate tracking banner image for the current progress
+ */
+function getTrackingImageUrl(distanceKm: number): string {
+  // Determine which tracking image to use based on distance
+  // These images are served from the public folder
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+
+  if (distanceKm > 3) {
+    // Just started - more than 3km away
+    return `${baseUrl}/assets/tracking-just-started.png`;
+  } else if (distanceKm > 2) {
+    // Started - 2-3km away
+    return `${baseUrl}/assets/tracking-started.png`;
+  } else if (distanceKm > 1) {
+    // Half way - 1-2km away
+    return `${baseUrl}/assets/tracking-half-way.png`;
+  } else if (distanceKm > 0.5) {
+    // Very close - 0.5-1km away
+    return `${baseUrl}/assets/tracking-very-close.png`;
+  } else if (distanceKm > 0.2) {
+    // Almost finished - 0.2-0.5km away
+    return `${baseUrl}/assets/tracking-almost-finished.png`;
+  } else {
+    // Ride completed - less than 0.2km
+    return `${baseUrl}/assets/tracking-ride-completed.png`;
+  }
+}
+
+/**
  * Send live tracking push notification to rider
  * Includes map image and ETA information
  */
 export async function sendLiveTrackingNotification(data: LiveTrackingNotificationData) {
   const { riderId, etaMinutes, distanceKm, status } = data;
 
-  // Generate map image URL
+  // Use tracking banner image instead of map for better visual impact
+  const trackingImageUrl = getTrackingImageUrl(distanceKm);
+
+  // Also generate map image as fallback (if Mapbox token is available)
   const mapImageUrl = generateMapImageUrl(data);
 
   // Build notification content based on status
@@ -111,8 +144,8 @@ export async function sendLiveTrackingNotification(data: LiveTrackingNotificatio
         distanceKm: distanceKm.toString(),
         deeplink: '/rider/active-ride',
       },
-      // Expo supports images in notifications
-      imageUrl: mapImageUrl || undefined,
+      // Use tracking banner image for visual impact
+      imageUrl: trackingImageUrl || mapImageUrl || undefined,
       // Android specific for heads-up banner
       android: {
         channelId: 'live-tracking',
@@ -128,7 +161,7 @@ export async function sendLiveTrackingNotification(data: LiveTrackingNotificatio
       },
     });
 
-    console.log(`[PushService] Live tracking notification sent to rider ${riderId}`);
+    console.log(`[PushService] Live tracking notification sent to rider ${riderId} with tracking image`);
   } catch (error) {
     console.error('[PushService] Failed to send live tracking notification:', error);
   }
