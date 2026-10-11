@@ -303,6 +303,8 @@ export async function POST(request: NextRequest, { params }: Params) {
     }
 
     if (!isAdmin) {
+      // Commented out email notification for regular support messages
+      // Email notifications should only be sent when AI escalates
       await notifyAdmins({
         allAdmins: true,
         department: "support",
@@ -312,6 +314,8 @@ export async function POST(request: NextRequest, { params }: Params) {
         actionUrl: `/admin/crm?ticket=${targetTicketId}`,
         metadata: { ticketId: targetTicketId, conversationId: ticket.conversation_id, userId: session.user.id, messageId: created?.id },
         sourceEventId: `support_message:${created?.id || targetTicketId}`,
+        // Disable email for regular support messages - only send on escalation
+        persist: false,
       }).catch((error) => console.error("[SUPPORT][MESSAGES][ADMIN_NOTIFY]", error));
 
       const { data: recentMessages } = await supabaseAdmin
@@ -393,6 +397,8 @@ export async function POST(request: NextRequest, { params }: Params) {
           actionUrl: `/admin/crm?ticket=${targetTicketId}`,
           metadata: { ticketId: targetTicketId, conversationId: ticket.conversation_id, userId: session.user.id, messageId: created?.id, category: ai.category, model: ai.model },
           sourceEventId: `support_ai_escalation:${created?.id || targetTicketId}`,
+          // Enable email for escalations
+          emailEnabled: true,
         }).catch((error) => console.error("[SUPPORT][MESSAGES][AI_ESCALATE]", error));
       }
 

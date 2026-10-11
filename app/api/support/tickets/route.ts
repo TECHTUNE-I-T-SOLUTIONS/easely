@@ -354,6 +354,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Commented out email notification for new support tickets
+    // Email notifications should only be sent when AI escalates
     await notifyAdmins({
       allAdmins: true,
       department: "support",
@@ -363,6 +365,8 @@ export async function POST(request: NextRequest) {
       actionUrl: `/admin/crm?ticket=${ticket.id}`,
       metadata: { ticketId: ticket.id, userId: session.user.id, category, priority },
       sourceEventId: `support_ticket_created:${ticket.id}`,
+      // Disable email for new support tickets - only send on escalation
+      persist: false,
     }).catch((error) => console.error("[SUPPORT][TICKETS][ADMIN_NOTIFY]", error));
 
     if (firstMessageText) {
@@ -436,6 +440,8 @@ export async function POST(request: NextRequest) {
           actionUrl: `/admin/crm?ticket=${ticket.id}`,
           metadata: { ticketId: ticket.id, userId: session.user.id, category: aiResult.category, model: aiResult.model },
           sourceEventId: `support_ai_escalation:${ticket.id}:${aiResult.category || "other"}`,
+          // Enable email for escalations
+          emailEnabled: true,
         }).catch((error) => console.error("[SUPPORT][TICKETS][AI_ESCALATE]", error));
       }
 

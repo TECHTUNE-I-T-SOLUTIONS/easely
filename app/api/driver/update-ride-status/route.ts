@@ -166,7 +166,7 @@ export async function POST(request: NextRequest) {
       const now = new Date().toISOString()
       updateData.dropoff_time = now
       updateData.completed_at = now  // For ride history/analytics (not used by settlement trigger)
-      
+
       // Calculate duration if pickup_time exists
       if (ride.pickup_time) {
         const pickupTime = new Date(ride.pickup_time).getTime()
@@ -174,7 +174,7 @@ export async function POST(request: NextRequest) {
         const durationMinutes = Math.round((dropoffTime - pickupTime) / (1000 * 60))
         updateData.duration_minutes = Math.max(0, durationMinutes)
       }
-      
+
       // Ensure settlement fields are set so trigger can use them (if any completion logic needed)
       if (!ride.fare_amount) updateData.fare_amount = 0;
       if (!ride.platform_fee) updateData.platform_fee = 0;

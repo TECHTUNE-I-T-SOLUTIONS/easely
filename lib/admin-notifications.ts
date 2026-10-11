@@ -14,6 +14,7 @@ type AdminNotificationInput = {
   metadata?: Record<string, unknown>
   sourceEventId?: string
   persist?: boolean
+  emailEnabled?: boolean
 }
 
 let vapidConfigured = false
@@ -67,7 +68,9 @@ function smtpTransport() {
 }
 
 async function sendAdminNotificationEmails(userIds: string[], input: AdminNotificationInput) {
-  if (!userIds.length || env("ADMIN_NOTIFICATION_EMAILS_ENABLED", "true") === "false") return 0
+  if (!userIds.length) return 0
+  // Check both the global setting and the per-notification emailEnabled flag
+  if (env("ADMIN_NOTIFICATION_EMAILS_ENABLED", "true") === "false" || input.emailEnabled === false) return 0
   const transporter = smtpTransport()
   if (!transporter) return 0
 

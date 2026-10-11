@@ -87,6 +87,34 @@ export async function POST(request: NextRequest) {
     let original_fare_amount = final_fare_amount
     let applied_cashback_reward_id: string | null = null
     let cashback_discount_amount = 0
+    let applied_penalty_amount = 0
+    let applied_credit_amount = 0
+
+    // Check for and apply pending cancellation penalty
+    try {
+      const { data: userData } = await supabaseAdmin
+        .from("users")
+        .select("pending_cancellation_penalty")
+        .eq("id", session.user.id)
+        .single()
+
+      if (userData?.pending_cancellation_penalty && Number(userData.pending_cancellation_penalty) > 0) {
+        applied_penalty_amount = Number(userData.pending_cancellation_penalty)
+        final_fare_amount = final_fare_amount + applied_penalty_amount
+
+        console.log("[BookRide] Applied cancellation penalty:", {
+          penaltyAmount: applied_penalty_amount,
+          originalFare: original_fare_amount,
+          finalFare: final_fare_amount,
+        })
+      }
+    } catch (error) {
+      console.error("[BookRide] Error checking penalty:", error)
+      // Continue without penalty if there's an error
+    }
+
+    // TODO: Check for and apply driver lateness credit (would need a user_credits table)
+    // For now, this would be handled by cashback or manual credit
 
     // Handle cashback reward if provided
     if (cashback_reward_id) {
@@ -117,7 +145,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: "Cashback reward has expired" }, { status: 400 })
         }
 
-        // Check minimum order amount
+        // Check minimum order amount (use fare after penalty)
         const minOrderAmount = cashbackReward.cashback_programs?.min_order_amount || 0
         if (final_fare_amount < minOrderAmount) {
           console.error("[BookRide] Fare below minimum order amount for cashback")
@@ -126,7 +154,7 @@ export async function POST(request: NextRequest) {
           }, { status: 400 })
         }
 
-        // Calculate discount amount
+        // Calculate discount amount (apply to fare after penalty)
         const discountPercentage = cashbackReward.discount_percentage
         const maxDiscountAmount = cashbackReward.cashback_programs?.max_discount_amount || Infinity
         cashback_discount_amount = (final_fare_amount * discountPercentage) / 100
@@ -142,6 +170,8 @@ export async function POST(request: NextRequest) {
 
         console.log("[BookRide] Cashback discount applied:", {
           originalFare: original_fare_amount,
+          penaltyApplied: applied_penalty_amount,
+          fareAfterPenalty: original_fare_amount + applied_penalty_amount,
           discountPercentage,
           discountAmount: cashback_discount_amount,
           finalFare: final_fare_amount,
@@ -173,6 +203,12 @@ export async function POST(request: NextRequest) {
         seats_booked: number_of_seats,
         ride_type: "single",
         status: "pending",
+        metadata: {
+          original_fare: original_fare_amount,
+          penalty_applied: applied_penalty_amount,
+          cashback_applied: cashback_discount_amount,
+          credit_applied: applied_credit_amount,
+        },
       })
       .select()
       .single()
@@ -212,6 +248,78 @@ export async function POST(request: NextRequest) {
         }
       } catch (error) {
         console.error("[BookRide] Error updating cashback reward:", error)
+      }
+    }
+
+    // Update rider penalty history if penalty was applied
+    if (applied_penalty_amount > 0) {
+      try {
+        // Find the pending penalty for this user
+        const { data: pendingPenalty } = await supabaseAdmin
+          .from("rider_penalties")
+          .select("*")
+          .eq("user_id", session.user.id)
+          .eq("status", "pending")
+          .limit(1)
+          .single()
+
+        if (pendingPenalty) {
+          // Update the existing pending penalty to "applied"
+          await supabaseAdmin
+            .from("rider_penalties")
+            .update({
+              status: "applied",
+              applied_ride_id: ride.id,
+              applied_at: new Date().toISOString(),
+            })
+            .eq("id", pendingPenalty.id)
+        } else {
+          // Create a new penalty record if none exists
+          await supabaseAdmin.from("rider_penalties").insert({
+            user_id: session.user.id,
+            ride_id: ride.id,
+            penalty_type: "cancellation",
+            penalty_amount: applied_penalty_amount,
+            penalty_percent: 30,
+            ride_fare_amount: original_fare_amount,
+            status: "applied",
+            applied_ride_id: ride.id,
+            applied_at: new Date().toISOString(),
+            metadata: {
+              original_fare: original_fare_amount,
+              final_fare: final_fare_amount,
+            },
+          })
+        }
+
+        // Clear the pending penalty from user
+        await supabaseAdmin
+          .from("users")
+          .update({ pending_cancellation_penalty: 0 })
+          .eq("id", session.user.id)
+
+        // Send notification about penalty application
+        await supabaseAdmin.from("notifications").insert({
+          user_id: session.user.id,
+          title: "Penalty Applied to Booking",
+          message: `Your cancellation penalty of ₦${applied_penalty_amount.toLocaleString()} has been applied to this booking.`,
+          type: "penalty_applied",
+          channel: "in_app",
+          related_table: "rides",
+          related_id: ride.id,
+          data: {
+            penalty_amount: applied_penalty_amount,
+            ride_id: ride.id,
+          },
+          deep_link: "/rider/active-ride",
+        })
+
+        console.log("[BookRide] Rider penalty applied and cleared:", {
+          penaltyAmount: applied_penalty_amount,
+          rideId: ride.id,
+        })
+      } catch (error) {
+        console.error("[BookRide] Error updating rider penalty:", error)
       }
     }
 
