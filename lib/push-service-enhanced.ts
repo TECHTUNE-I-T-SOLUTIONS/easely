@@ -101,8 +101,9 @@ export async function sendLiveTrackingNotification(data: LiveTrackingNotificatio
     await sendPushNotification([riderId], {
       title,
       body,
-      type: 'ride_update',
+      type: 'live_tracking',
       categoryId: 'live_tracking',
+      channelId: 'live-tracking', // Android channel for MAX importance
       data: {
         rideId: data.rideId,
         status,
@@ -112,6 +113,19 @@ export async function sendLiveTrackingNotification(data: LiveTrackingNotificatio
       },
       // Expo supports images in notifications
       imageUrl: mapImageUrl || undefined,
+      // Android specific for heads-up banner
+      android: {
+        channelId: 'live-tracking',
+        priority: 'max',
+        sticky: false,
+        autoCancel: true,
+        vibrate: [0, 200, 100, 200],
+      },
+      // iOS specific
+      ios: {
+        sound: 'default',
+        badge: 1,
+      },
     });
 
     console.log(`[PushService] Live tracking notification sent to rider ${riderId}`);
