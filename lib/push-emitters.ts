@@ -133,6 +133,72 @@ export async function emitDriverArrived(
 }
 
 /**
+ * Emit ride started notification to rider
+ * Called when driver starts the ride
+ */
+export async function emitRideStarted(
+  riderId: string,
+  rideId: string,
+  driverName: string,
+  destination: string
+) {
+  try {
+    const payload = {
+      title: "🚗 Ride Started",
+      body: `${driverName} has started the trip to ${destination}. Enjoy your ride!`,
+      type: "ride_update" as const,
+      data: {
+        rideId,
+        driverName,
+        destination,
+        updateType: "ride_started",
+        action: "ride_started_notification",
+        deeplink: "/rider/active-ride",
+      },
+    };
+
+    await sendPushNotification([riderId], payload);
+    console.log("✅ [Emitter] Ride started notification sent to rider:", riderId);
+  } catch (error) {
+    console.error("❌ [Emitter] Failed to emit ride started:", error);
+  }
+}
+
+/**
+ * Emit driver location & distance update notification
+ * Called when driver location updates significantly
+ */
+export async function emitDriverProximityUpdate(
+  riderId: string,
+  rideId: string,
+  distanceKm: number,
+  etaMinutes: number,
+  phase: "to_pickup" | "to_destination"
+) {
+  try {
+    const distanceFormatted = distanceKm < 1 ? `${Math.round(distanceKm * 1000)} m` : `${distanceKm.toFixed(1)} km`;
+    const phaseText = phase === "to_pickup" ? "to pickup" : "to destination";
+    const payload = {
+      title: phase === "to_pickup" ? "🛺 Driver Approaching" : "📍 On the Way",
+      body: `Driver is ${distanceFormatted} away (~${etaMinutes} min ${phaseText})`,
+      type: "ride_update" as const,
+      data: {
+        rideId,
+        distanceKm: distanceKm.toString(),
+        etaMinutes: etaMinutes.toString(),
+        action: "driver_proximity_notification",
+        deeplink: "/rider/active-ride",
+      },
+    };
+
+    await sendPushNotification([riderId], payload);
+    console.log("✅ [Emitter] Driver proximity update sent to rider:", riderId);
+  } catch (error) {
+    console.error("❌ [Emitter] Failed to emit driver proximity update:", error);
+  }
+}
+
+/**
  * Emit ride update notification (live location, etc)
  * Called for status updates during ride
  */

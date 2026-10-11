@@ -388,12 +388,13 @@ export async function POST(request: NextRequest) {
           },
         })
       } else if (status === "completed") {
+        const finalFare = updatedRide.fare_amount || ride.fare_amount || 0
         // Ride completed - send completion notification to rider
         await emitRideCompleted(
           ride.rider_id,
           session.user.id,
           rideId,
-          updatedRide.fare || 0,
+          finalFare,
           updatedRide.rating
         )
 
@@ -401,30 +402,30 @@ export async function POST(request: NextRequest) {
           session.user.id,
           rideId,
           "status",
-          `Trip ${rideId.slice(0, 8)} completed successfully. Final fare: ₦${updatedRide.fare || 0}.`
+          `Trip ${rideId.slice(0, 8)} completed successfully. Final fare: ₦${finalFare}.`
         )
 
         // Push notification to rider
         await sendPushNotification([ride.rider_id], {
           title: "✅ Ride Completed",
-          body: `Trip completed. Fare: ₦${updatedRide.fare || 0}`,
+          body: `Trip completed. Fare: ₦${finalFare}`,
           type: "ride_update",
           data: {
             rideId,
             status: "completed",
-            fare: updatedRide.fare || 0,
+            fare: finalFare,
           },
         })
 
         // Push notification to driver
         await sendPushNotification([session.user.id], {
           title: "✅ Ride Complete",
-          body: `Trip ${rideId.slice(0, 8)} completed. Total fare: ₦${updatedRide.fare || 0}`,
+          body: `Trip ${rideId.slice(0, 8)} completed. Total fare: ₦${finalFare}`,
           type: "ride_update",
           data: {
             rideId,
             status: "completed",
-            fare: updatedRide.fare || 0,
+            fare: finalFare,
           },
         })
       }

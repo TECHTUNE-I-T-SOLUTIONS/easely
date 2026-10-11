@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     // Verify driver is assigned to this ride
     const { data: ride } = await supabase
       .from("rides")
-      .select("id, status")
+      .select("id, status, metadata")
       .eq("id", rideId)
       .eq("driver_id", driver.id)
       .single()
@@ -49,20 +49,43 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Insert or update driver location
+    const nowIso = new Date().toISOString()
+    const updatedLocation = {
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      accuracy: accuracy ? parseFloat(accuracy) : null,
+      speed: speed ? parseFloat(speed) : null,
+      heading: heading ? parseFloat(heading) : null,
+      timestamp: nowIso,
+    }
+
+    // Insert into driver_locations
     const { error: locationError } = await supabase
       .from("driver_locations")
       .insert({
         id: crypto.randomUUID(),
         driver_id: driver.id,
         ride_id: rideId,
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-        accuracy: accuracy ? parseFloat(accuracy) : null,
-        speed: speed ? parseFloat(speed) : null,
-        heading: heading ? parseFloat(heading) : null,
-        timestamp: new Date().toISOString(),
+        latitude: updatedLocation.latitude,
+        longitude: updatedLocation.longitude,
+        accuracy: updatedLocation.accuracy,
+        speed: updatedLocation.speed,
+        heading: updatedLocation.heading,
+        timestamp: nowIso,
       })
+
+    // Update rides metadata so Postgres Realtime fires for rides table
+    const existingMeta = (ride.metadata && typeof ride.metadata === 'object') ? ride.metadata : {}
+    await supabase
+      .from("rides")
+      .update({
+        metadata: {
+          ...existingMeta,
+          driver_location: updatedLocation,
+        },
+        updated_at: nowIso,
+      })
+      .eq("id", rideId)
 
     if (locationError) {
       console.error("Location update error:", locationError)
