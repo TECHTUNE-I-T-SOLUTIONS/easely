@@ -22,7 +22,6 @@ export async function POST(request: NextRequest) {
     }
 
     // Update driver's last known location in the database
-    // We can store this in the driver's record or in a separate location tracking table
     const { error: updateError } = await supabaseAdmin
       .from("drivers")
       .update({
@@ -42,9 +41,33 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // If there's an active ride, update the ride metadata with driver location
-    // and send live tracking notification to rider
+    // If there's an active ride, also save to driver_locations table for tracking
     if (rideId) {
+      const { data: driver } = await supabaseAdmin
+        .from("drivers")
+        .select("id")
+        .eq("user_id", session.user.id)
+        .single()
+
+      if (driver) {
+        // Save to driver_locations table for tracking history
+        await supabaseAdmin
+          .from("driver_locations")
+          .insert({
+            driver_id: driver.id,
+            ride_id: rideId,
+            latitude,
+            longitude,
+            recorded_at: new Date().toISOString(),
+          })
+        console.log("[DriverLocation] Saved to driver_locations table", {
+          driverId: driver.id,
+          rideId,
+          latitude,
+          longitude,
+        })
+      }
+
       const { data: ride } = await supabaseAdmin
         .from("rides")
         .select("*, users!inner(*), drivers!inner(*)")

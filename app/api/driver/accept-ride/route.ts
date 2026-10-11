@@ -91,8 +91,9 @@ export async function POST(request: NextRequest) {
 
       await sendPushNotification([ride.rider_id], {
         title: "✅ Driver Accepted",
-        body: `${driverName} accepted your ride request`,
+        body: `${driverName} accepted your ride request. Heading to pickup location.`,
         type: "ride_accepted",
+        categoryId: "ride_accepted_action",
         data: {
           rideId: ride.id,
           deeplink: `/rider/active-ride?rideId=${ride.id}`,
