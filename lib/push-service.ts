@@ -234,9 +234,21 @@ export const sendPushNotification = async (
     body: string;
     data?: Record<string, any>;
     categoryId?: string;
-    type: 'ride_request' | 'ride_accepted' | 'ride_update' | 'driver_arrived' | 'trip_started' | 'ride_completed' | 'ride_cancelled' | 'support_message' | 'payment_received' | 'security_alert' | 'remittance_due' | 'remittance_reminder' | 'cashback';
+    type: 'ride_request' | 'ride_accepted' | 'ride_update' | 'driver_arrived' | 'trip_started' | 'ride_completed' | 'ride_cancelled' | 'support_message' | 'payment_received' | 'security_alert' | 'remittance_due' | 'remittance_reminder' | 'cashback' | 'live_tracking';
     imageUrl?: string;
     actions?: Array<{ id: string; title: string; action: string }>;
+    channelId?: string;
+    android?: {
+      channelId?: string;
+      priority?: string;
+      sticky?: boolean;
+      autoCancel?: boolean;
+      vibrate?: number[];
+    };
+    ios?: {
+      sound?: string;
+      badge?: number;
+    };
   }
 ) => {
   const results: Array<{ userId: string; success: boolean; error?: string }> = [];
@@ -338,9 +350,11 @@ export const sendPushNotification = async (
             await sendExpoNotification(pushToken, {
               ...notificationPayload,
               categoryId: payload.categoryId,
-              channelId: channelIdForType(payload.type),
+              channelId: payload.channelId || channelIdForType(payload.type),
               imageUrl: payload.imageUrl,
               actions: payload.actions,
+              android: payload.android,
+              ios: payload.ios,
             });
           }
           // For web
@@ -389,6 +403,17 @@ const sendExpoNotification = async (
     channelId?: string;
     imageUrl?: string;
     actions?: Array<{ id: string; title: string; action: string }>;
+    android?: {
+      channelId?: string;
+      priority?: string;
+      sticky?: boolean;
+      autoCancel?: boolean;
+      vibrate?: number[];
+    };
+    ios?: {
+      sound?: string;
+      badge?: number;
+    };
   }
 ) => {
   try {
@@ -422,12 +447,28 @@ const sendExpoNotification = async (
           title: action.title,
           icon: '/android-icon.png', // Optional icon for action button
         })),
+        ...payload.android, // Merge in custom android settings
       };
-      
+
       // iOS actions
       message.ios = {
         categoryId: payload.categoryId || 'ride-requests',
+        ...payload.ios, // Merge in custom ios settings
       };
+    } else {
+      // Apply custom android/ios settings even without actions
+      if (payload.android) {
+        message.android = {
+          channelId: payload.channelId || channelIdForType(payload.data?.type),
+          ...payload.android,
+        };
+      }
+      if (payload.ios) {
+        message.ios = {
+          categoryId: payload.categoryId || 'ride-requests',
+          ...payload.ios,
+        };
+      }
     }
 
     const response = await fetch('https://exp.host/--/api/v2/push/send', {
