@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
           // Calculate ETA (simplified - you'd use a routing API in production)
           const distanceKm = calculateDistance(
             { lat: latitude, lng: longitude },
-            ride.status === "accepted" ? pickupCoords : destCoords
+            ride.status === "accepted" ? { lat: pickupCoords.latitude, lng: pickupCoords.longitude } : { lat: destCoords.latitude, lng: destCoords.longitude }
           )
           const etaMinutes = Math.ceil(distanceKm * 2) // Simplified: 2 min per km
 
