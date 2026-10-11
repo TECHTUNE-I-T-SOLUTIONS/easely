@@ -89,8 +89,11 @@ function getTrackingImageUrl(distanceKm: number): string {
   } else if (distanceKm > 0.5) {
     // Very close - 0.5-1km away
     return `${baseUrl}/assets/tracking-very-close.png`;
+  } else if (distanceKm > 0.3) {
+    // Very close to finish - 0.3-0.5km away
+    return `${baseUrl}/assets/tracking-very-close-to-finish.png`;
   } else if (distanceKm > 0.2) {
-    // Almost finished - 0.2-0.5km away
+    // Almost finished - 0.2-0.3km away
     return `${baseUrl}/assets/tracking-almost-finished.png`;
   } else {
     // Ride completed - less than 0.2km
