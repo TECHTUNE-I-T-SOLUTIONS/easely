@@ -10,13 +10,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Fetch users with push tokens
-    const { data: users, error } = await supabaseAdmin
-      .from("users")
-      .select("id, email, first_name, last_name, push_token")
-      .not("push_token", "is", null)
-      .not("push_token", "eq", "")
-      .order("created_at", { ascending: false })
+    // Fetch users with push tokens from push_subscriptions table
+    const { data: subscriptions, error } = await supabaseAdmin
+      .from("push_subscriptions")
+      .select(`
+        user_id,
+        push_token,
+        platform,
+        is_active,
+        users!inner(id, email, first_name, last_name)
+      `)
+      .eq("is_active", true)
+      .order("subscribed_at", { ascending: false })
       .limit(50)
 
     if (error) {
@@ -24,10 +29,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Failed to fetch users" }, { status: 500 })
     }
 
+    // Transform the data to include user info and push token
+    const users = subscriptions?.map((sub: any) => ({
+      id: sub.users.id,
+      email: sub.users.email,
+      first_name: sub.users.first_name,
+      last_name: sub.users.last_name,
+      push_token: sub.push_token,
+      platform: sub.platform,
+    })) || []
+
     return NextResponse.json({
       success: true,
-      users: users || [],
-      count: users?.length || 0,
+      users,
+      count: users.length,
     })
   } catch (error) {
     console.error("[UsersWithPushTokens] Error:", error)
