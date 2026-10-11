@@ -71,33 +71,32 @@ function generateMapImageUrl(data: LiveTrackingNotificationData): string {
 /**
  * Get tracking image URL based on distance to destination
  * Returns the appropriate tracking banner image for the current progress
+ * Uses hosted images from imgbb for better performance and no bundling
  */
 function getTrackingImageUrl(distanceKm: number): string {
   // Determine which tracking image to use based on distance
-  // These images are served from the public folder
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
-
+  // Using hosted images from imgbb (no need to bundle in app or serve from server)
   if (distanceKm > 3) {
     // Just started - more than 3km away
-    return `${baseUrl}/assets/tracking-just-started.png`;
+    return 'https://ibb.co/TM76MTSP';
   } else if (distanceKm > 2) {
     // Started - 2-3km away
-    return `${baseUrl}/assets/tracking-started.png`;
+    return 'https://ibb.co/hkSWcW0';
   } else if (distanceKm > 1) {
     // Half way - 1-2km away
-    return `${baseUrl}/assets/tracking-half-way.png`;
+    return 'https://ibb.co/nqGsN4Kg';
   } else if (distanceKm > 0.5) {
     // Very close - 0.5-1km away
-    return `${baseUrl}/assets/tracking-very-close.png`;
+    return 'https://ibb.co/3mGk8Sj8';
   } else if (distanceKm > 0.3) {
     // Very close to finish - 0.3-0.5km away
-    return `${baseUrl}/assets/tracking-very-close-to-finish.png`;
+    return 'https://ibb.co/FbcTtdhm';
   } else if (distanceKm > 0.2) {
     // Almost finished - 0.2-0.3km away
-    return `${baseUrl}/assets/tracking-almost-finished.png`;
+    return 'https://ibb.co/FbYQ9VvL';
   } else {
     // Ride completed - less than 0.2km
-    return `${baseUrl}/assets/tracking-ride-completed.png`;
+    return 'https://ibb.co/67H9g755';
   }
 }
 
