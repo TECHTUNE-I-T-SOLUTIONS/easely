@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase"
 import { getSessionFromRequest } from "@/lib/auth"
-import { sendLiveTrackingNotification } from "@/lib/push-service-enhanced"
+import { sendNativeLiveTrackingNotification, sendQuickLiveUpdate } from "@/lib/live-tracking-native"
 
 export async function POST(request: NextRequest) {
   try {
@@ -103,10 +103,15 @@ export async function POST(request: NextRequest) {
           )
           const etaMinutes = Math.ceil(distanceKm * 2) // Simplified: 2 min per km
 
-          // Send live tracking notification to rider
-          await sendLiveTrackingNotification({
+          // Get driver name and vehicle plate
+          const driverName = ride.drivers?.users ? `${ride.drivers.users.first_name} ${ride.drivers.users.last_name}` : 'Your driver';
+          const vehiclePlate = ride.drivers?.plate_number || '';
+
+          // Send native live tracking notification to rider
+          await sendNativeLiveTrackingNotification({
             rideId,
             riderId: ride.rider_id,
+            driverName,
             driverLocation: { lat: latitude, lng: longitude },
             pickupLocation: {
               lat: pickupCoords.latitude,
@@ -121,6 +126,7 @@ export async function POST(request: NextRequest) {
             etaMinutes,
             distanceKm,
             status: ride.status as 'accepted' | 'in_progress' | 'arrived',
+            vehiclePlate,
           })
         }
       }

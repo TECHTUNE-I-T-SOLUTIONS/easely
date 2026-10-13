@@ -5,6 +5,7 @@ import { getDriverRemittanceSummary } from "@/lib/driver-settlement";
 import { supabaseAdmin } from "@/lib/supabase";
 import { notifyAdmins } from "@/lib/admin-notifications";
 import { sendPushNotification } from "@/lib/push-service";
+import { sendNativeLiveTrackingNotification } from "@/lib/live-tracking-native";
 
 export async function POST(request: NextRequest) {
   try {
@@ -85,10 +86,20 @@ export async function POST(request: NextRequest) {
         .eq("id", session.user.id)
         .single();
 
-      const driverName = driverUser 
-        ? `${driverUser.first_name} ${driverUser.last_name}` 
+      const driverName = driverUser
+        ? `${driverUser.first_name} ${driverUser.last_name}`
         : "A driver";
 
+      // Get driver's vehicle plate
+      const { data: driverDetails } = await supabaseAdmin!
+        .from("drivers")
+        .select("plate_number")
+        .eq("user_id", session.user.id)
+        .single();
+
+      const vehiclePlate = driverDetails?.plate_number || '';
+
+      // Send standard notification
       await sendPushNotification([ride.rider_id], {
         title: "✅ Driver Accepted",
         body: `${driverName} accepted your ride request. Heading to pickup location.`,
@@ -103,6 +114,35 @@ export async function POST(request: NextRequest) {
           destinationZone: ride.destination_zone,
         },
       });
+
+      // Also send native live tracking notification with emoji-based visuals
+      // Extract coordinates from ride data if available
+      const pickupCoords = extractCoordinates(ride.pickup_description);
+      const destCoords = extractCoordinates(ride.destination_description);
+
+      if (pickupCoords && destCoords) {
+        await sendNativeLiveTrackingNotification({
+          rideId: ride.id,
+          riderId: ride.rider_id,
+          driverName,
+          driverLocation: { lat: 0, lng: 0 }, // Will be updated on first location update
+          pickupLocation: {
+            lat: pickupCoords.latitude,
+            lng: pickupCoords.longitude,
+            address: ride.pickup_zone,
+          },
+          destinationLocation: {
+            lat: destCoords.latitude,
+            lng: destCoords.longitude,
+            address: ride.destination_zone,
+          },
+          etaMinutes: eta_minutes || 10,
+          distanceKm: 5, // Will be updated on first location update
+          status: 'accepted',
+          vehiclePlate,
+        });
+      }
+
       console.log("[AcceptRide] Push notification sent to rider", {
         rideId,
         riderId: ride.rider_id,
@@ -171,4 +211,18 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+// Helper function to extract coordinates from description string
+function extractCoordinates(description?: string): { latitude: number; longitude: number } | null {
+  if (!description) return null
+  const latMatch = description.match(/Lat:\s*([-\d.]+)/)
+  const lngMatch = description.match(/Lng:\s*([-\d.]+)/)
+  if (latMatch && lngMatch) {
+    return {
+      latitude: parseFloat(latMatch[1]),
+      longitude: parseFloat(lngMatch[1]),
+    }
+  }
+  return null
 }
