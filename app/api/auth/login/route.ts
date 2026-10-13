@@ -162,12 +162,13 @@ export async function POST(request: NextRequest) {
 
     // Create a simple token from user ID (mobile app will cache the session)
     const token = Buffer.from(`${user.id}:${Date.now()}`).toString("base64");
-    
+
     console.log("📊 [LOGIN] Raw user from DB:", {
       id: user.id,
       role: user.role,
       email: user.email,
-      phone: user.phone_number
+      phone: user.phone_number,
+      status: user.status
     });
     console.log("✅ [LOGIN] User authenticated successfully - sending response");
 

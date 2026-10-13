@@ -111,6 +111,10 @@ export async function POST(request: NextRequest) {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Normalize phone number for consistency
+    const normalizedPhone = normalizePhone(phone);
+    console.log("📱 [SIGNUP] Normalized phone:", { original: phone, normalized: normalizedPhone });
+
     // Generate referral code
     const referralCode = `CHKE${firstName.substring(0, 2).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
@@ -219,7 +223,7 @@ export async function POST(request: NextRequest) {
       first_name: firstName,
       last_name: lastName,
       email,
-      phone_number: phone,
+      phone_number: normalizedPhone,
       password_hash: hashedPassword,
       profile_picture_url: profilePictureUrl,
       role,
@@ -379,7 +383,7 @@ export async function POST(request: NextRequest) {
       firstName,
       lastName,
       email,
-      phone,
+      phone: normalizedPhone,
       role,
       referralCode,
       plateNumber: plateNumber || null,
