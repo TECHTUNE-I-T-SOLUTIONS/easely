@@ -162,20 +162,19 @@ export async function sendSMS(options: TermiiSendSMSOptions) {
 export async function sendRideRequestSMS(options: RideRequestSMSOptions) {
   const shortRideRef = options.rideId.slice(0, 8).toUpperCase()
   const pickupTime = formatRidePickupTime(options.pickupTime)
+  const baseUrl = (process.env.NEXT_PUBLIC_APP_BASE_URL || process.env.NEXTAUTH_URL || "https://charterkeke.com").replace(/\/+$/, "")
+  const webLink = `${baseUrl}/update?rideId=${encodeURIComponent(options.rideId)}&source=sms`
   const message = `CHARTER KEKE RIDE REQUEST
-  
+
 New ride: CK-${shortRideRef}
 From: ${options.pickup}
 To: ${options.destination}
 Pickup time: ${pickupTime}
 Fare: ₦${Math.round(options.fare || 0)}
 
-Open in app: charterkeke:///driver/ride-details?rideId=${options.rideId}
+View & Accept: ${webLink}
 
-TO ACCEPT THIS RIDE:
-1. Accept the ride in your driver app as soon as possible.
-2. Accept via the email sent to you (check spam folder if not in inbox).
-3. Accept it in the notification sent to your phone.
+Tap the link → Open in app or Accept on web. You can also accept in your driver app or email.
 
 Open requests expire at the end of the scheduled pickup day.`
 
@@ -283,15 +282,16 @@ export async function sendBulkSMS(phoneNumbers: string[], message: string, chann
 
 export async function sendRideAcceptanceSMS(driverPhone: string, rideId: string, riderName?: string, pickupTime?: string | Date | null) {
   const formattedPickupTime = formatRidePickupTime(pickupTime)
+  const baseUrl = (process.env.NEXT_PUBLIC_APP_BASE_URL || process.env.NEXTAUTH_URL || "https://charterkeke.com").replace(/\/+$/, "")
+  const webLink = `${baseUrl}/update?rideId=${encodeURIComponent(rideId)}&source=sms`
   const message = `RIDE ACCEPTED - CK-${rideId.slice(0, 8).toUpperCase()}
 
 You have accepted the ride.
 ${riderName ? `Rider: ${riderName}` : ""}
 Pickup time: ${formattedPickupTime}
-Open in app: charterkeke:///driver/ride-details?rideId=${rideId}
+Manage ride: ${webLink}
 
-You will receive pickup location soon.
-Watch for updates from Charter Keke.
+You will receive pickup location soon. Watch for updates from Charter Keke.
 
 Safe travels!`
 
