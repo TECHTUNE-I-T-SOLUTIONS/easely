@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Image from "next/image"
 import { useSession } from "next-auth/react"
 import { motion } from "framer-motion"
@@ -35,7 +35,9 @@ function AdminSettingsContent() {
     enableEmailNotifications: true,
     paystackEnabled: true,
     termiiEnabled: true,
+    cashlessEnabled: false,
   })
+  const [loadingCashless, setLoadingCashless] = useState(false)
   const [avatarUrl, setAvatarUrl] = useState("")
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
 
@@ -75,6 +77,40 @@ function AdminSettingsContent() {
 
   const handleSave = () => {
     toast.success("Settings saved successfully")
+  }
+
+  // Load initial cashless state
+  useEffect(() => {
+    fetch("/api/settings/cashless-enabled")
+      .then((res) => res.json())
+      .then((data) => {
+        if (typeof data.enabled === "boolean") {
+          setSettings((prev) => ({ ...prev, cashlessEnabled: data.enabled }))
+        }
+      })
+      .catch((err) => console.error("Failed to load cashless status:", err))
+  }, [])
+
+  const handleCashlessToggle = async (enabled: boolean) => {
+    try {
+      setLoadingCashless(true)
+      const res = await fetch("/api/admin/cashless-toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      })
+      const result = await res.json()
+      if (res.ok) {
+        setSettings((prev) => ({ ...prev, cashlessEnabled: enabled }))
+        toast.success(result.message || `Cashless mode ${enabled ? "enabled" : "disabled"}`)
+      } else {
+        toast.error(result.message || "Failed to update cashless toggle")
+      }
+    } catch (err) {
+      toast.error("Network error updating cashless toggle")
+    } finally {
+      setLoadingCashless(false)
+    }
   }
 
   return (
@@ -338,6 +374,35 @@ function AdminSettingsContent() {
                     <div className="space-y-2">
                       <Label>Paystack Secret Key</Label>
                       <Input type="password" placeholder="sk_live_..." className="bg-background/50 border-primary/20" />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-card/50 backdrop-blur border-primary/10">
+                  <CardHeader>
+                    <CardTitle className="flex items-center justify-between">
+                      <span>Cashless Ecosystem (Wallets & Digital Payment)</span>
+                      <span className={`text-xs px-2.5 py-0.5 rounded-full font-mono font-semibold ${settings.cashlessEnabled ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/30" : "bg-amber-500/10 text-amber-500 border border-amber-500/30"}`}>
+                        {settings.cashlessEnabled ? "ACTIVE" : "DORMANT"}
+                      </span>
+                    </CardTitle>
+                    <CardDescription>
+                      Master switch for in-app wallet balance, passenger fare auto-deduction, and driver payout credits. When disabled, the entire app defaults to standard cash & manual remittance.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-primary/20">
+                      <div>
+                        <p className="font-semibold text-foreground">Enable Cashless Mode</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Toggles in-app wallet payments across both Rider and Driver mobile apps.
+                        </p>
+                      </div>
+                      <Switch
+                        disabled={loadingCashless}
+                        checked={settings.cashlessEnabled}
+                        onCheckedChange={handleCashlessToggle}
+                      />
                     </div>
                   </CardContent>
                 </Card>

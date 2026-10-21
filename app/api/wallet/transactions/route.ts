@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { getSessionFromRequest } from "@/lib/auth";
+import { isCashlessEnabled } from "@/lib/cashless";
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,7 +15,37 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get("limit") || "20");
     const type = searchParams.get("type");
 
-    // Get user's wallet
+    const cashlessActive = await isCashlessEnabled();
+
+    if (cashlessActive) {
+      // Query enriched ledger from wallet_transactions
+      let query = supabaseAdmin
+        .from("wallet_transactions")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (type) {
+        query = query.eq("type", type);
+      }
+
+      const { data: walletTransactions } = await query;
+      if (walletTransactions && walletTransactions.length > 0) {
+        const formatted = walletTransactions.map((tx: any) => ({
+          id: tx.id,
+          amount: Number(tx.amount),
+          transaction_type: ["topup", "ride_earning", "refund"].includes(tx.type) ? "credit" : "debit",
+          source: tx.type,
+          description: tx.description || tx.type,
+          created_at: tx.created_at,
+          status: "completed",
+        }));
+        return NextResponse.json({ transactions: formatted, source: "wallet_transactions" });
+      }
+    }
+
+    // Default legacy transactions fallback (unchanged behavior)
     const { data: wallet } = await supabaseAdmin
       .from("wallets")
       .select("id")
@@ -22,10 +53,7 @@ export async function GET(request: NextRequest) {
       .single();
 
     if (!wallet) {
-      return NextResponse.json(
-        { error: "Wallet not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ transactions: [] });
     }
 
     let query = supabaseAdmin
@@ -48,7 +76,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({ transactions });
+    return NextResponse.json({ transactions: transactions || [] });
   } catch (error) {
     console.error("Transaction fetch error:", error);
     return NextResponse.json(

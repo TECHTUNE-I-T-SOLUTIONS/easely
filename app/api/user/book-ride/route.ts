@@ -116,6 +116,33 @@ export async function POST(request: NextRequest) {
     // TODO: Check for and apply driver lateness credit (would need a user_credits table)
     // For now, this would be handled by cashback or manual credit
 
+    // Prevent duplicate ride bookings - check if user has a recent pending/dispatched ride
+    try {
+      const recentRideTime = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
+      const { data: recentRides } = await supabaseAdmin
+        .from("rides")
+        .select("id, status, created_at")
+        .eq("rider_id", session.user.id)
+        .in("status", ["pending", "dispatched"])
+        .gte("created_at", recentRideTime.toISOString())
+        .limit(1)
+
+      if (recentRides && recentRides.length > 0) {
+        console.log("[BookRide] Duplicate ride prevented - user has recent ride:", recentRides[0])
+        return NextResponse.json(
+          {
+            error: "You already have a pending ride request. Please wait for it to be processed.",
+            existingRideId: recentRides[0].id,
+            existingRideStatus: recentRides[0].status,
+          },
+          { status: 409 } // Conflict status
+        )
+      }
+    } catch (error) {
+      console.error("[BookRide] Error checking for duplicate rides:", error)
+      // Continue with booking even if check fails (fail-safe)
+    }
+
     // Handle cashback reward if provided
     if (cashback_reward_id) {
       try {
