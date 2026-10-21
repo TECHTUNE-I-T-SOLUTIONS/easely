@@ -1,25 +1,8 @@
--- Fix Notifications Body Column Error
--- This file fixes any triggers that still reference the 'body' column in notifications table
+-- Fix Notifications Trigger Column Error
+-- This file fixes notification trigger functions that might be using the wrong column name
 -- The notifications table uses 'message' column, not 'body'
 
--- First, check if notifications table has the correct columns
--- If it has 'body' column, we need to rename it to 'message'
--- If it already has 'message', we just need to fix triggers
-
--- Step 1: Check and rename column if needed
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'notifications'
-    AND column_name = 'body'
-  ) THEN
-    ALTER TABLE notifications RENAME COLUMN body TO message;
-    RAISE NOTICE 'Renamed body column to message in notifications table';
-  END IF;
-END $$;
-
--- Step 2: Drop all existing notification trigger functions that might be using wrong column
+-- Step 1: Drop all existing notification trigger functions that might be using wrong column
 DROP FUNCTION IF EXISTS notify_cashback_reward_earned CASCADE;
 DROP FUNCTION IF EXISTS notify_cashback_reward_used CASCADE;
 DROP FUNCTION IF EXISTS notify_spin_wheel_result CASCADE;
@@ -30,7 +13,7 @@ DROP FUNCTION IF EXISTS notify_ride_accepted CASCADE;
 DROP FUNCTION IF EXISTS notify_ride_completed CASCADE;
 DROP FUNCTION IF EXISTS notify_ride_cancelled CASCADE;
 
--- Step 3: Recreate trigger functions with correct column names (message instead of body)
+-- Step 2: Recreate trigger functions with correct column name (message)
 
 -- Function to notify when cashback reward is earned
 CREATE OR REPLACE FUNCTION notify_cashback_reward_earned()
@@ -262,8 +245,8 @@ FOR EACH ROW
 EXECUTE FUNCTION notify_payment_confirmed();
 
 -- Step 6: Add comments for documentation
-COMMENT ON FUNCTION notify_cashback_reward_earned() IS 'Creates notification when cashback reward is earned. Uses message column instead of body.';
-COMMENT ON FUNCTION notify_cashback_reward_used() IS 'Creates notification when cashback reward is used. Uses message column instead of body.';
-COMMENT ON FUNCTION notify_spin_wheel_result() IS 'Creates notification when spin wheel result is won. Uses message column instead of body.';
-COMMENT ON FUNCTION notify_overdue_settlement() IS 'Creates notification when settlement becomes overdue. Uses message column instead of body.';
-COMMENT ON FUNCTION notify_payment_confirmed() IS 'Creates notification when payment is confirmed. Uses message column instead of body.';
+COMMENT ON FUNCTION notify_cashback_reward_earned() IS 'Creates notification when cashback reward is earned. Uses message column.';
+COMMENT ON FUNCTION notify_cashback_reward_used() IS 'Creates notification when cashback reward is used. Uses message column.';
+COMMENT ON FUNCTION notify_spin_wheel_result() IS 'Creates notification when spin wheel result is won. Uses message column.';
+COMMENT ON FUNCTION notify_overdue_settlement() IS 'Creates notification when settlement becomes overdue. Uses message column.';
+COMMENT ON FUNCTION notify_payment_confirmed() IS 'Creates notification when payment is confirmed. Uses message column.';
