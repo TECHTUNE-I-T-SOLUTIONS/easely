@@ -24,7 +24,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     // Fetch the ride details
     const { data: ride, error: rideError } = await supabaseAdmin!
       .from("rides")
-      .select("id, rider_id, status, driver_id, assigned_driver_id, fare_amount, accepted_at, pickup_time, metadata")
+      .select("id, rider_id, status, driver_id, fare_amount, accepted_at, pickup_time, metadata")
       .eq("id", rideId)
       .single();
 
@@ -172,12 +172,11 @@ export async function POST(request: NextRequest, { params }: Params) {
     }
 
     // Notify the driver if ride was accepted
-    if (ride.status === "accepted" && (ride.driver_id || ride.assigned_driver_id)) {
-      const driverId = ride.driver_id || ride.assigned_driver_id;
+    if (ride.status === "accepted" && ride.driver_id) {
       const { data: driver } = await supabaseAdmin!
         .from("drivers")
         .select("user_id")
-        .eq("id", driverId)
+        .eq("id", ride.driver_id)
         .single();
 
       if (driver?.user_id) {
