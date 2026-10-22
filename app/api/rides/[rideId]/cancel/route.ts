@@ -29,18 +29,35 @@ export async function POST(request: NextRequest, { params }: Params) {
       .single();
 
     if (rideError || !ride) {
-      return NextResponse.json({ error: "Ride not found" }, { status: 404 });
+      console.error("[RIDE_CANCEL] Ride not found:", { rideId, rideError });
+      return NextResponse.json({ 
+        error: "Ride not found", 
+        details: rideError?.message || "The specified ride does not exist or may have been cancelled already",
+        rideId 
+      }, { status: 404 });
     }
 
     // Verify the rider owns this ride
     if (ride.rider_id !== session.user.id) {
-      return NextResponse.json({ error: "You can only cancel your own rides" }, { status: 403 });
+      console.log("[RIDE_CANCEL] User does not own this ride:", { 
+        sessionUserId: session.user.id, 
+        rideRiderId: ride.rider_id 
+      });
+      return NextResponse.json({ 
+        error: "You can only cancel your own rides",
+        rideId 
+      }, { status: 403 });
     }
 
     // Check if ride can be cancelled
     const terminalStatuses = ["completed", "cancelled"];
     if (terminalStatuses.includes(ride.status)) {
-      return NextResponse.json({ error: "Ride cannot be cancelled" }, { status: 400 });
+      console.log("[RIDE_CANCEL] Ride already in terminal state:", { rideId, status: ride.status });
+      return NextResponse.json({ 
+        error: `Ride cannot be cancelled - it is already ${ride.status}`,
+        currentStatus: ride.status,
+        rideId 
+      }, { status: 400 });
     }
 
     // Calculate cancellation fee if applicable
