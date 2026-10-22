@@ -99,109 +99,132 @@ export async function POST(request: NextRequest, { params }: Params) {
       .eq("id", rideId);
 
     if (updateError) {
-      return NextResponse.json({ error: "Failed to cancel ride" }, { status: 500 });
+      console.error("[RIDE_CANCEL] Failed to update ride status:", updateError);
+      return NextResponse.json({
+        error: "Failed to cancel ride",
+        details: updateError?.message,
+        code: updateError?.code,
+      }, { status: 500 });
     }
 
     // Record penalty if applicable
     if (cancellationFee > 0 && !waiveFee) {
-      // Add to user's pending penalty
-      const { data: userData } = await supabaseAdmin
-        .from("users")
-        .select("pending_cancellation_penalty")
-        .eq("id", session.user.id)
-        .single();
+      try {
+        // Add to user's pending penalty
+        const { data: userData } = await supabaseAdmin
+          .from("users")
+          .select("pending_cancellation_penalty")
+          .eq("id", session.user.id)
+          .single();
 
-      const currentPenalty = Number(userData?.pending_cancellation_penalty || 0);
-      const newPenalty = currentPenalty + cancellationFee;
+        const currentPenalty = Number(userData?.pending_cancellation_penalty || 0);
+        const newPenalty = currentPenalty + cancellationFee;
 
-      await supabaseAdmin
-        .from("users")
-        .update({
-          pending_cancellation_penalty: newPenalty,
-        })
-        .eq("id", session.user.id);
+        await supabaseAdmin
+          .from("users")
+          .update({
+            pending_cancellation_penalty: newPenalty,
+          })
+          .eq("id", session.user.id);
 
-      // Record penalty history
-      await supabaseAdmin.from("rider_penalties").insert({
-        user_id: session.user.id,
-        ride_id: rideId,
-        penalty_type: "cancellation",
-        penalty_amount: cancellationFee,
-        penalty_percent: 0.30,
-        ride_fare_amount: ride.fare_amount,
-        status: "pending",
-        metadata: {
-          reason,
-          elapsed_since_acceptance: ride.accepted_at
-            ? (Date.now() - new Date(ride.accepted_at).getTime()) / (1000 * 60)
-            : null,
-        },
-      });
-
-      // Send penalty notification
-      await supabaseAdmin.from("notifications").insert({
-        user_id: session.user.id,
-        title: "Cancellation Fee Applied",
-        message: `A cancellation fee of ₦${cancellationFee.toLocaleString()} has been added to your next booking.`,
-        type: "penalty",
-        channel: "in_app",
-        related_table: "rides",
-        related_id: rideId,
-        data: {
+        // Record penalty history
+        await supabaseAdmin.from("rider_penalties").insert({
+          user_id: session.user.id,
+          ride_id: rideId,
+          penalty_type: "cancellation",
           penalty_amount: cancellationFee,
-          penalty_percent: 30,
-          ride_id: rideId,
-        },
-        deep_link: "/rider/rides-history",
-      });
-    } else if (waiveFee) {
-      // Send notification that fee was waived
-      await supabaseAdmin.from("notifications").insert({
-        user_id: session.user.id,
-        title: "Cancellation Fee Waived",
-        message: "Your cancellation fee has been waived due to driver communication.",
-        type: "penalty_waived",
-        channel: "in_app",
-        related_table: "rides",
-        related_id: rideId,
-        data: {
-          ride_id: rideId,
-        },
-        deep_link: "/rider/rides-history",
-      });
-    }
-
-    // Notify the driver if ride was accepted
-    if (ride.status === "accepted" && ride.driver_id) {
-      const { data: driver } = await supabaseAdmin!
-        .from("drivers")
-        .select("user_id")
-        .eq("id", ride.driver_id)
-        .single();
-
-      if (driver?.user_id) {
-        await sendPushNotification(driver.user_id, {
-          title: "Ride Cancelled",
-          body: waiveFee
-            ? "The rider cancelled the ride (no fee - driver communicated)"
-            : "The rider cancelled the ride (cancellation fee may apply)",
-          type: "ride_cancelled",
-          data: { rideId, type: "ride_cancelled", feeWaived: waiveFee },
+          penalty_percent: 0.30,
+          ride_fare_amount: ride.fare_amount,
+          status: "pending",
+          metadata: {
+            reason,
+            elapsed_since_acceptance: ride.accepted_at
+              ? (Date.now() - new Date(ride.accepted_at).getTime()) / (1000 * 60)
+              : null,
+          },
         });
+
+        // Send penalty notification
+        await supabaseAdmin.from("notifications").insert({
+          user_id: session.user.id,
+          title: "Cancellation Fee Applied",
+          message: `A cancellation fee of ₦${cancellationFee.toLocaleString()} has been added to your next booking.`,
+          type: "penalty",
+          channel: "in_app",
+          related_table: "rides",
+          related_id: rideId,
+          data: {
+            penalty_amount: cancellationFee,
+            penalty_percent: 30,
+            ride_id: rideId,
+          },
+          deep_link: "/rider/rides-history",
+        });
+      } catch (penaltyError) {
+        console.error("[RIDE_CANCEL] Failed to record penalty (non-critical):", penaltyError);
+        // Don't fail the cancellation if penalty recording fails
+      }
+    } else if (waiveFee) {
+      try {
+        // Send notification that fee was waived
+        await supabaseAdmin.from("notifications").insert({
+          user_id: session.user.id,
+          title: "Cancellation Fee Waived",
+          message: "Your cancellation fee has been waived due to driver communication.",
+          type: "penalty_waived",
+          channel: "in_app",
+          related_table: "rides",
+          related_id: rideId,
+          data: {
+            ride_id: rideId,
+          },
+          deep_link: "/rider/rides-history",
+        });
+      } catch (notificationError) {
+        console.error("[RIDE_CANCEL] Failed to send waiver notification (non-critical):", notificationError);
+        // Don't fail the cancellation if notification fails
       }
     }
 
+    // Notify the driver if ride was accepted
+    try {
+      if (ride.status === "accepted" && ride.driver_id) {
+        const { data: driver } = await supabaseAdmin!
+          .from("drivers")
+          .select("user_id")
+          .eq("id", ride.driver_id)
+          .single();
+
+        if (driver?.user_id) {
+          await sendPushNotification(driver.user_id, {
+            title: "Ride Cancelled",
+            body: waiveFee
+              ? "The rider cancelled the ride (no fee - driver communicated)"
+              : "The rider cancelled the ride (cancellation fee may apply)",
+            type: "ride_cancelled",
+            data: { rideId, type: "ride_cancelled", feeWaived: waiveFee },
+          });
+        }
+      }
+    } catch (driverNotifyError) {
+      console.error("[RIDE_CANCEL] Failed to notify driver (non-critical):", driverNotifyError);
+    }
+
     // Notify the rider
-    await sendPushNotification(ride.rider_id, {
-      title: "Ride Cancelled",
-      body: cancellationFee > 0
-        ? `Ride cancelled. Cancellation fee: ₦${cancellationFee.toLocaleString()}`
-        : waiveFee
-          ? "Ride cancelled without fee (driver communicated)"
-          : "Ride cancelled successfully",
-      type: "ride_cancelled",
-      data: { rideId, type: "ride_cancelled", cancellationFee },
-    });
+    try {
+      await sendPushNotification(ride.rider_id, {
+        title: "Ride Cancelled",
+        body: cancellationFee > 0
+          ? `Ride cancelled. Cancellation fee: ₦${cancellationFee.toLocaleString()}`
+          : waiveFee
+            ? "Ride cancelled without fee (driver communicated)"
+            : "Ride cancelled successfully",
+        type: "ride_cancelled",
+        data: { rideId, type: "ride_cancelled", cancellationFee },
+      });
+    } catch (riderNotifyError) {
+      console.error("[RIDE_CANCEL] Failed to notify rider (non-critical):", riderNotifyError);
+    }
 
     return NextResponse.json({
       success: true,
@@ -210,8 +233,15 @@ export async function POST(request: NextRequest, { params }: Params) {
       cancellationFee,
       feeWaived: waiveFee,
     });
-  } catch (error) {
-    console.error("[RIDE_CANCEL]", error);
-    return NextResponse.json({ error: "Failed to cancel ride" }, { status: 500 });
+  } catch (error: any) {
+    console.error("[RIDE_CANCEL] Unexpected error:", {
+      message: error?.message,
+      stack: error?.stack,
+      rideId,
+    });
+    return NextResponse.json({
+      error: "Failed to cancel ride",
+      details: error?.message || "An unexpected error occurred",
+    }, { status: 500 });
   }
 }
