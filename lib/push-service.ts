@@ -228,7 +228,7 @@ export const getUserActiveSubscriptions = (userId: string): PushSubscription[] =
  * Enhanced to support rich notifications with images and action buttons
  */
 export const sendPushNotification = async (
-  userIds: string[],
+  userIds: string | string[],
   payload: {
     title: string;
     body: string;
@@ -251,18 +251,20 @@ export const sendPushNotification = async (
     };
   }
 ) => {
+  // Normalize userIds to always be an array
+  const normalizedUserIds = Array.isArray(userIds) ? userIds : [userIds];
   const results: Array<{ userId: string; success: boolean; error?: string }> = [];
-  
-  if (!userIds || userIds.length === 0) return results;
+
+  if (!normalizedUserIds || normalizedUserIds.length === 0) return results;
 
   try {
     if (!supabaseAdmin) {
       console.warn('⚠️ [PUSH] Supabase not initialized');
-      return userIds.map(userId => ({ userId, success: false, error: 'Supabase not initialized' }));
+      return normalizedUserIds.map(userId => ({ userId, success: false, error: 'Supabase not initialized' }));
     }
 
-    const eligibleUserIds = await activeUserIds(userIds);
-    const skippedDeleted = userIds.filter((userId) => !eligibleUserIds.includes(userId));
+    const eligibleUserIds = await activeUserIds(normalizedUserIds);
+    const skippedDeleted = normalizedUserIds.filter((userId) => !eligibleUserIds.includes(userId));
     for (const userId of skippedDeleted) {
       results.push({ userId, success: false, error: 'User is deleted or not contactable' });
     }
