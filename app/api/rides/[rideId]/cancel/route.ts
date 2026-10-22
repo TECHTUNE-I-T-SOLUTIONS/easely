@@ -81,14 +81,14 @@ export async function POST(request: NextRequest, { params }: Params) {
       .from("rides")
       .update({
         status: "cancelled",
-        cancelled_at: new Date().toISOString(),
-        cancelled_by: "rider",
-        cancellation_reason: reason,
-        cancellation_fee: cancellationFee,
         updated_at: new Date().toISOString(),
         metadata: {
           ...ride.metadata,
           fee_waived: waiveFee,
+          cancellation_reason: reason,
+          cancellation_fee: cancellationFee,
+          cancelled_by: "rider",
+          cancelled_at: new Date().toISOString(),
           cancellation_context: {
             elapsed_since_acceptance: ride.accepted_at
               ? (Date.now() - new Date(ride.accepted_at).getTime()) / (1000 * 60)
