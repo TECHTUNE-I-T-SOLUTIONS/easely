@@ -27,16 +27,39 @@ export async function GET(request: NextRequest) {
     }
 
     const { dateString } = getDateRangeForOffset(-1)
-    
+
     let settlement = null
-    let summary = { blocked: false, overdueTotal: 0, todayTotal: 0, grandTotal: 0, todayRemittance: null, outstandingSettlements: [] }
-    
+    let summary: any = null
+
     try {
       settlement = await upsertSettlementForDate(driver.id, dateString)
       summary = await getDriverRemittanceSummary(driver.id)
     } catch (settlementError) {
       console.error("[SettlementStatus] Settlement operations failed:", settlementError)
       // Return partial data rather than failing completely
+    }
+
+    // If settlement operations failed, return a safe default response
+    if (!summary) {
+      return NextResponse.json({
+        blocked: false,
+        reason: null,
+        currentSettlement: settlement ? summarizeSettlement(settlement) : null,
+        todaySettlement: null,
+        todayRemittance: null,
+        outstandingSettlements: [],
+        totalOverdue: 0,
+        totalOutstanding: 0,
+        totalTodayDue: 0,
+        totalDueNow: 0,
+        remittanceSummary: {
+          overdueTotal: 0,
+          todayTotal: 0,
+          grandTotal: 0,
+          serverTime: new Date().toISOString(),
+          timezone: "Africa/Lagos",
+        },
+      })
     }
 
     return NextResponse.json({
