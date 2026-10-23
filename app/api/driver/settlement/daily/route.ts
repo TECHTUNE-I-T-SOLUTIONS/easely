@@ -80,7 +80,23 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Driver profile not found" }, { status: 404 })
     }
 
-    const settlement = await withRetry(() => upsertSettlementForDate(driver.id, dateString))
+    let settlement = null
+    try {
+      settlement = await withRetry(() => upsertSettlementForDate(driver.id, dateString))
+    } catch (settlementError: any) {
+      console.error("[SettlementDaily] Failed to upsert settlement:", settlementError)
+      // If the error is about the 'status' column, it's a database trigger issue
+      // Return partial data rather than failing completely
+      if (settlementError?.code === '42703' && settlementError?.message?.includes('status')) {
+        console.error("[SettlementDaily] Database trigger error - missing 'status' column reference")
+        return NextResponse.json({
+          error: "Database configuration error - settlement trigger needs fixing",
+          code: "DB_TRIGGER_ERROR",
+          date: dateString,
+        }, { status: 500 })
+      }
+      throw settlementError
+    }
 
     const { start, end } = getLagosDayRange(dateString)
 

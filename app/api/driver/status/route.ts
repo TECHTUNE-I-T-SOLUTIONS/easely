@@ -181,8 +181,16 @@ export async function GET(request: NextRequest) {
     }
 
     const { dateString } = getDateRangeForOffset(-1)
-    await upsertSettlementForDate(driver.id, dateString)
-    const remittance = await getDriverRemittanceSummary(driver.id)
+    
+    // Settlement operations are non-critical - don't block if they fail
+    let remittance = { blocked: false, overdueTotal: 0, todayTotal: 0, grandTotal: 0, todayRemittance: null }
+    try {
+      await upsertSettlementForDate(driver.id, dateString)
+      remittance = await getDriverRemittanceSummary(driver.id)
+    } catch (settlementError) {
+      console.error("[DriverStatus] Settlement operations failed (non-critical):", settlementError)
+      // Continue with default values - don't block driver status
+    }
 
     let status = driver.availability_status || "offline"
     let updatedAt = driver.updated_at

@@ -27,16 +27,25 @@ export async function GET(request: NextRequest) {
     }
 
     const { dateString } = getDateRangeForOffset(-1)
-    const settlement = await upsertSettlementForDate(driver.id, dateString)
-    const summary = await getDriverRemittanceSummary(driver.id)
+    
+    let settlement = null
+    let summary = { blocked: false, overdueTotal: 0, todayTotal: 0, grandTotal: 0, todayRemittance: null, outstandingSettlements: [] }
+    
+    try {
+      settlement = await upsertSettlementForDate(driver.id, dateString)
+      summary = await getDriverRemittanceSummary(driver.id)
+    } catch (settlementError) {
+      console.error("[SettlementStatus] Settlement operations failed:", settlementError)
+      // Return partial data rather than failing completely
+    }
 
     return NextResponse.json({
       blocked: summary.blocked,
       reason: summary.blocked
         ? "Please settle outstanding platform fees before accepting new rides."
         : null,
-      currentSettlement: summarizeSettlement(settlement),
-      todaySettlement: summarizeSettlement(summary.todaySettlement),
+      currentSettlement: settlement ? summarizeSettlement(settlement) : null,
+      todaySettlement: summary.todaySettlement ? summarizeSettlement(summary.todaySettlement) : null,
       todayRemittance: summary.todayRemittance,
       outstandingSettlements: summary.outstandingSettlements,
       totalOverdue: summary.overdueTotal,
