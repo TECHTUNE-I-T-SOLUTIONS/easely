@@ -100,6 +100,72 @@ export async function GET(request: NextRequest) {
 
     const { start, end } = getLagosDayRange(dateString)
 
+    if (!settlement) {
+      // If settlement upsert failed, still try to get rides for partial data
+      const { data: rides, error: ridesError } = await withRetry(async () =>
+        supabaseAdmin!
+          .from("rides")
+          .select("id, fare_amount, platform_fee, driver_earnings, status, pickup_zone, destination_zone, distance_km, duration_minutes, created_at, updated_at, remitted, remitted_at")
+          .eq("driver_id", driver.id)
+          .in("status", ["accepted", "in_progress", "completed"])
+          .gte("updated_at", start.toISOString())
+          .lt("updated_at", end.toISOString())
+          .order("updated_at", { ascending: false })
+      )
+
+      if (ridesError) {
+        throw ridesError
+      }
+
+      const ridesList = (rides || []).map((ride: any) => ({
+        id: ride.id,
+        status: ride.status,
+        pickup_zone: ride.pickup_zone,
+        destination_zone: ride.destination_zone,
+        fare_amount: Number(ride.fare_amount || 0),
+        platform_fee: Number(ride.platform_fee || 0),
+        driver_earnings: Number(ride.driver_earnings || 0),
+        remitted: Boolean(ride.remitted),
+        remitted_at: ride.remitted_at || null,
+        distance_km: Number(ride.distance_km || 0),
+        duration_minutes: Number(ride.duration_minutes || 0),
+        accepted_at: ride.updated_at,
+        ride_created_at: ride.created_at,
+      }))
+
+      return NextResponse.json({
+        date: dateString,
+        settlement: null,
+        rides: ridesList,
+        totals: {
+          acceptedRides: ridesList.length,
+          grossAmount: ridesList.reduce((sum, ride) => sum + Number(ride.fare_amount || 0), 0),
+          platformFee: ridesList.reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
+          remittedPlatformFee: ridesList
+            .filter((ride) => ride.remitted)
+            .reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
+          unremittedPlatformFee: ridesList
+            .filter((ride) => !ride.remitted)
+            .reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
+          netDriverEarnings: ridesList.reduce((sum, ride) => sum + Number(ride.driver_earnings || 0), 0),
+        },
+        paymentSummary: {
+          completedPaymentsCount: 0,
+          paidPlatformFees: 0,
+          outstandingPlatformFees: ridesList
+            .filter((ride) => !ride.remitted)
+            .reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
+          lastPaymentDate: null,
+        },
+        due: {
+          dueAt: end.toISOString(),
+          isOverdue: new Date().getTime() >= end.getTime(),
+          millisecondsRemaining: Math.max(end.getTime() - new Date().getTime(), 0),
+        },
+        error: "Settlement record unavailable due to database trigger error",
+      })
+    }
+
     const { data: rides, error: ridesError } = await withRetry(async () =>
       supabaseAdmin!
         .from("rides")
@@ -130,6 +196,41 @@ export async function GET(request: NextRequest) {
       accepted_at: ride.updated_at,
       ride_created_at: ride.created_at,
     }))
+
+    // Skip payment-related operations if settlement failed to upsert
+    if (!settlement) {
+      const unremittedPlatformFees = ridesList
+        .filter((ride) => !ride.remitted)
+        .reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0)
+
+      return NextResponse.json({
+        date: dateString,
+        settlement: null,
+        rides: ridesList,
+        totals: {
+          acceptedRides: ridesList.length,
+          grossAmount: ridesList.reduce((sum, ride) => sum + Number(ride.fare_amount || 0), 0),
+          platformFee: ridesList.reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
+          remittedPlatformFee: ridesList
+            .filter((ride) => ride.remitted)
+            .reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
+          unremittedPlatformFee,
+          netDriverEarnings: ridesList.reduce((sum, ride) => sum + Number(ride.driver_earnings || 0), 0),
+        },
+        paymentSummary: {
+          completedPaymentsCount: 0,
+          paidPlatformFees: 0,
+          outstandingPlatformFees: unremittedPlatformFees,
+          lastPaymentDate: null,
+        },
+        due: {
+          dueAt: end.toISOString(),
+          isOverdue: new Date().getTime() >= end.getTime(),
+          millisecondsRemaining: Math.max(end.getTime() - new Date().getTime(), 0),
+        },
+        error: "Settlement record unavailable due to database trigger error",
+      })
+    }
 
     const directPaymentsResult = await withRetry(async () =>
       supabaseAdmin!
