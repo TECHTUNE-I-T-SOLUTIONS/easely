@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
         platform_fee,
         distance_km,
         completed_at,
+        created_at,
         status,
         rating,
         users:rider_id (first_name, last_name)

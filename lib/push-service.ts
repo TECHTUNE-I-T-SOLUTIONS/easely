@@ -96,7 +96,7 @@ export const storePushSubscription = async (subscription: PushSubscription) => {
         .order('subscribed_at', { ascending: false });
 
       if (existingError) {
-        console.warn('âš ï¸ [PUSH] Failed to look up existing subscription:', existingError.message);
+        console.warn('[PUSH] Failed to look up existing subscription:', existingError.message);
       }
 
       const existing = existingRows?.[0];
