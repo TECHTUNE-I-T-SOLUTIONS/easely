@@ -61,6 +61,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Check if driver already has an active ride
+    const { data: activeRides, error: activeRidesError } = await supabaseAdmin!
+      .from("rides")
+      .select("id, status")
+      .eq("driver_id", driver.id)
+      .in("status", ["accepted", "in_progress"]);
+
+    if (!activeRidesError && activeRides && activeRides.length > 0) {
+      return NextResponse.json(
+        {
+          error: "You already have an active ride. Please complete your current ride before accepting a new one.",
+          code: "has_active_ride",
+          activeRideId: activeRides[0].id,
+        },
+        { status: 403 }
+      );
+    }
+
     const acceptance = await acceptRideFirstCome({
       rideId,
       driverUserId: session.user.id,
