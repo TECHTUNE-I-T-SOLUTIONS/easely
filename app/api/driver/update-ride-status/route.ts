@@ -6,6 +6,7 @@ import { emitRideCompleted, emitRideUpdate } from "@/lib/push-emitters"
 import { sendPushNotification } from "@/lib/push-service"
 import { cancelExpiredOpenRides, isRideExpired } from "@/lib/ride-expiry"
 import { requireVerifiedDriver } from "@/lib/driver-verification"
+import { getDriverRemittanceSummary } from "@/lib/driver-settlement"
 
 export async function POST(request: NextRequest) {
   try {
@@ -204,18 +205,30 @@ export async function POST(request: NextRequest) {
     }
 
     // Set driver status back to 'online' when ride is completed
+    // Only if remittance is not overdue
     if (status === "completed") {
       try {
-        await supabaseAdmin!
-          .from("drivers")
-          .update({
-            availability_status: "online",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", driver.id);
-        console.log("[UpdateRideStatus] Driver status set to 'online'", { driverId: driver.id });
+        // Check remittance status first
+        const remittance = await getDriverRemittanceSummary(driver.id);
+        
+        // Only set to online if not blocked by overdue remittance
+        if (!remittance.blocked) {
+          await supabaseAdmin!
+            .from("drivers")
+            .update({
+              availability_status: "online",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", driver.id);
+          console.log("[UpdateRideStatus] Driver status set to 'online'", { driverId: driver.id });
+        } else {
+          console.log("[UpdateRideStatus] Driver not set to online due to overdue remittance", { 
+            driverId: driver.id,
+            grandTotal: remittance.grandTotal 
+          });
+        }
       } catch (statusError) {
-        console.error("[UpdateRideStatus] Failed to set driver status to 'online':", statusError);
+        console.error("[UpdateRideStatus] Failed to check/set driver status:", statusError);
         // Don't fail the request if status update fails - ride is already completed
       }
     }
