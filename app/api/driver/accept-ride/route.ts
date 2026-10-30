@@ -95,6 +95,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Set driver status to 'busy' after accepting a ride
+    try {
+      await supabaseAdmin!
+        .from("drivers")
+        .update({
+          availability_status: "busy",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", driver.id);
+      console.log("[AcceptRide] Driver status set to 'busy'", { driverId: driver.id });
+    } catch (statusError) {
+      console.error("[AcceptRide] Failed to set driver status to 'busy':", statusError);
+      // Don't fail the request if status update fails - ride is already accepted
+    }
+
     // Send push notification to rider
     try {
       const ride = acceptance.ride;

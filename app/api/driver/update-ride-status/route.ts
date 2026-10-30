@@ -203,6 +203,23 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Set driver status back to 'online' when ride is completed
+    if (status === "completed") {
+      try {
+        await supabaseAdmin!
+          .from("drivers")
+          .update({
+            availability_status: "online",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", driver.id);
+        console.log("[UpdateRideStatus] Driver status set to 'online'", { driverId: driver.id });
+      } catch (statusError) {
+        console.error("[UpdateRideStatus] Failed to set driver status to 'online':", statusError);
+        // Don't fail the request if status update fails - ride is already completed
+      }
+    }
+
     // Award random cashback reward after first ride completion (1-5% discount)
     if (status === "completed") {
       try {
