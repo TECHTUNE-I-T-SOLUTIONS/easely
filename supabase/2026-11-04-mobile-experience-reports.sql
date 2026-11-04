@@ -56,7 +56,11 @@ BEGIN
   report_ids := COALESCE(NEW.analysis->'reportIds', jsonb_build_array(NEW.event_id));
   notification_title := format(
     'Mobile app %s: %s / %s',
-    CASE WHEN NEW.event_type = 'feedback' THEN 'feedback' ELSE 'issue' END,
+    CASE
+      WHEN NEW.action = 'user_initiated_health_check' THEN 'health check'
+      WHEN NEW.event_type = 'feedback' THEN 'feedback'
+      ELSE 'issue'
+    END,
     COALESCE(NEW.user_role, 'user'),
     COALESCE(NEW.screen, 'unknown screen')
   );

@@ -6,6 +6,7 @@ import { sendPushNotification } from "@/lib/push-service";
 type Params = { params: Promise<{ rideId: string }> };
 
 export async function POST(request: NextRequest, { params }: Params) {
+  const { rideId } = await params;
   try {
     const session = await getSessionFromRequest(request);
 
@@ -13,7 +14,6 @@ export async function POST(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { rideId } = await params;
     const body = await request.json();
     const { reason, waiver = false } = body || {};
 

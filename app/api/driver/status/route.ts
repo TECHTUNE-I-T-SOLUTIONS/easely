@@ -183,7 +183,16 @@ export async function GET(request: NextRequest) {
     const { dateString } = getDateRangeForOffset(-1)
     
     // Settlement operations are non-critical - don't block if they fail
-    let remittance = { blocked: false, overdueTotal: 0, todayTotal: 0, grandTotal: 0, todayRemittance: null }
+    type RemittanceSummary = Awaited<ReturnType<typeof getDriverRemittanceSummary>>
+    let remittance: Pick<RemittanceSummary, "blocked" | "overdueTotal" | "todayTotal" | "grandTotal"> & {
+      todayRemittance: RemittanceSummary["todayRemittance"] | null
+    } = {
+      blocked: false,
+      overdueTotal: 0,
+      todayTotal: 0,
+      grandTotal: 0,
+      todayRemittance: null,
+    }
     try {
       await upsertSettlementForDate(driver.id, dateString)
       remittance = await getDriverRemittanceSummary(driver.id)

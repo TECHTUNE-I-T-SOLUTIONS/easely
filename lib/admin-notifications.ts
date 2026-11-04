@@ -16,6 +16,7 @@ type AdminNotificationInput = {
   persist?: boolean
   emailEnabled?: boolean
   priorityEmail?: string
+  emailHtml?: string
 }
 
 let vapidConfigured = false
@@ -111,7 +112,7 @@ async function sendAdminNotificationEmails(userIds: string[], input: AdminNotifi
                 </div>
                 <div style="padding:24px;color:#333;font-size:15px;line-height:1.65">
                   <p>Hello ${escapeHtml(user.first_name || "Admin")},</p>
-                  <p>${escapeHtml(input.body).replace(/\n/g, "<br>")}</p>
+                  ${input.emailHtml || `<p style="white-space:pre-wrap">${escapeHtml(input.body)}</p>`}
                   <p><a href="${url}" style="display:inline-block;background:#ff8a00;color:#111;text-decoration:none;font-weight:800;border-radius:12px;padding:12px 16px">Open in admin</a></p>
                 </div>
               </div>

@@ -1,10 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { getSessionFromRequest } from '@/lib/auth'
 import { notifyAdmins } from '@/lib/admin-notifications'
 import { analyzeMobileExperience } from '@/lib/mobile-experience-ai'
 import { supabaseAdmin } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
+export const maxDuration = 60
 
 const allowedTypes = new Set(['error', 'screen_view', 'task_success', 'task_failure', 'feedback'])
 const rateLimit = new Map<string, { startedAt: number; count: number }>()
@@ -23,6 +24,58 @@ function occurredAt(value: unknown) {
   if (typeof value !== 'string') return new Date().toISOString()
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString()
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character] || character)
+}
+
+function mobileExperienceEmailHtml(input: {
+  role: string
+  screen: string
+  appVersion: string
+  platform: string
+  healthCheck: boolean
+  reportCount: number
+  insight: { summary: string; likelyCause: string; suggestions: string[]; confidence: number; model: string }
+  events: Array<Record<string, any>>
+}) {
+  const suggestions = input.insight.suggestions.length
+    ? input.insight.suggestions.map((suggestion, index) => `<li style="margin:6px 0">${escapeHtml(suggestion)}</li>`).join('')
+    : '<li>No automated suggestions were returned. Review the report evidence below.</li>'
+  const evidence = input.events.slice(0, 12).map((event, index) => `
+    <tr>
+      <td style="padding:12px;border-bottom:1px solid #eee;font-weight:700;vertical-align:top">${index + 1}. ${escapeHtml(event.event_type)}</td>
+      <td style="padding:12px;border-bottom:1px solid #eee;vertical-align:top">
+        <div><b>${escapeHtml(event.screen || 'Unknown screen')}</b> · ${escapeHtml(event.action || 'No action')}</div>
+        <div style="color:#777;font-size:12px;margin:4px 0">${escapeHtml(event.occurred_at || 'Time unavailable')}</div>
+        ${event.error_name ? `<div><b>Error:</b> ${escapeHtml(event.error_name)}</div>` : ''}
+        ${event.message ? `<div style="white-space:pre-wrap;margin-top:4px">${escapeHtml(event.message)}</div>` : ''}
+        ${event.feedback ? `<div style="white-space:pre-wrap;margin-top:4px"><b>Feedback:</b> ${escapeHtml(event.feedback)}</div>` : ''}
+        ${event.stack ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:#a65300">Technical details</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f7f7;padding:10px;border-radius:8px;font-size:11px">${escapeHtml(String(event.stack).slice(0, 1800))}</pre></details>` : ''}
+      </td>
+    </tr>`).join('')
+
+  return `
+    <h2 style="margin:0 0 12px;color:#181818">${input.healthCheck ? 'Requested app health check' : 'Mobile app report'}</h2>
+    <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:18px;background:#fff8ef;border-radius:10px">
+      <tr><td style="padding:8px 12px"><b>Account role:</b> ${escapeHtml(input.role)}</td><td style="padding:8px 12px"><b>Screen:</b> ${escapeHtml(input.screen)}</td></tr>
+      <tr><td style="padding:8px 12px"><b>App version:</b> ${escapeHtml(input.appVersion)}</td><td style="padding:8px 12px"><b>Platform:</b> ${escapeHtml(input.platform)}</td></tr>
+      <tr><td style="padding:8px 12px" colspan="2"><b>Events analyzed:</b> ${input.reportCount} · <b>AI model:</b> ${escapeHtml(input.insight.model)} · <b>Confidence:</b> ${Math.round(input.insight.confidence * 100)}%</td></tr>
+    </table>
+    <section style="border:1px solid #f0dec8;border-radius:12px;padding:16px;margin:16px 0">
+      <h3 style="margin:0 0 8px;color:#a65300">AI assessment</h3>
+      <p style="margin:6px 0"><b>Summary:</b> ${escapeHtml(input.insight.summary)}</p>
+      <p style="margin:6px 0"><b>Likely cause:</b> ${escapeHtml(input.insight.likelyCause)}</p>
+      <p style="margin:10px 0 4px"><b>Suggested follow-up</b></p>
+      <ul style="margin:4px 0;padding-left:22px">${suggestions}</ul>
+      <p style="color:#777;font-size:12px;margin:10px 0 0">AI suggestions are based only on the consented events listed below. Confirm findings against source code and production logs.</p>
+    </section>
+    <h3 style="margin:20px 0 8px">Recent diagnostic evidence</h3>
+    <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px">${evidence || '<tr><td>No recent report events were available.</td></tr>'}</table>
+  `
 }
 
 export async function POST(request: NextRequest) {
@@ -69,6 +122,7 @@ export async function POST(request: NextRequest) {
       user_role: role,
       analysis: null,
     }))
+    const healthCheck = body.healthCheck === true
     const { data: inserted, error: insertError } = await supabaseAdmin
       .from('mobile_experience_reports')
       .upsert(rows, { onConflict: 'event_id', ignoreDuplicates: true })
@@ -81,23 +135,44 @@ export async function POST(request: NextRequest) {
 
     const actionableTypes = ['error', 'task_failure', 'feedback']
     let actionable: Array<Record<string, any>> = (inserted || []).filter((event: any) => actionableTypes.includes(event.event_type))
-    if (!actionable.length) {
-      const retryIds = events.filter((event: any) => actionableTypes.includes(event.event_type)).map((event: any) => event.event_id)
-      if (retryIds.length) {
-        const { data: previousReports } = await supabaseAdmin
+    if (actionable.length || healthCheck) after(async () => {
+      try {
+      if (healthCheck) {
+        const { data: recentReports, error: historyError } = await supabaseAdmin
           .from('mobile_experience_reports')
           .select('event_id,event_type,screen,action,occurred_at,error_name,message,stack,feedback,app_version,platform,analysis')
-          .in('event_id', retryIds)
-        actionable = previousReports || []
+          .eq('user_id', session.user.id)
+          .order('created_at', { ascending: false })
+          .limit(30)
+        if (historyError) console.error('[MOBILE][EXPERIENCE][HEALTH_CHECK_HISTORY]', historyError)
+        else actionable = recentReports || actionable
       }
-    }
-    if (actionable.length) {
+      if (!actionable.length) {
+        const retryIds = events.filter((event: any) => actionableTypes.includes(event.event_type)).map((event: any) => event.event_id)
+        if (retryIds.length) {
+          const { data: previousReports } = await supabaseAdmin
+            .from('mobile_experience_reports')
+            .select('event_id,event_type,screen,action,occurred_at,error_name,message,stack,feedback,app_version,platform,analysis')
+            .in('event_id', retryIds)
+          actionable = previousReports || []
+        }
+      }
+      if (!actionable.length) return
       const inputOrder = new Map<string, number>()
       events.forEach((event: any, index: number) => inputOrder.set(event.event_id, index))
       actionable.sort((a, b) => (inputOrder.get(a.event_id) ?? Number.MAX_SAFE_INTEGER) - (inputOrder.get(b.event_id) ?? Number.MAX_SAFE_INTEGER))
-      const first = actionable[0]
-      const existingInsight = actionable.find((event: any) => event.analysis)?.analysis
-      const insight = existingInsight || await analyzeMobileExperience(actionable) || {
+      const healthCheckEvent = healthCheck
+        ? actionable.find((event: any) => event.action === 'user_initiated_health_check')
+        : undefined
+      const first = healthCheckEvent || actionable[0]
+      const existingInsight = healthCheck ? undefined : actionable.find((event: any) => event.analysis)?.analysis
+      const insight = existingInsight || await analyzeMobileExperience(actionable.map((event: any) => ({
+        ...event,
+        type: event.event_type,
+        occurredAt: event.occurred_at,
+        errorName: event.error_name,
+        appVersion: event.app_version,
+      }))) || {
         summary: first.message || first.feedback || 'A mobile app experience event was reported.',
         likelyCause: 'AI analysis is unavailable; the report needs manual review.',
         suggestions: [],
@@ -114,18 +189,34 @@ export async function POST(request: NextRequest) {
       const shouldDispatch = !existingInsight || Boolean(analysisUpdateError)
 
       const screen = first.screen || 'unknown screen'
-      const title = first.event_type === 'error'
+      const title = healthCheck
+        ? `Mobile app health check: ${role} / ${screen}`
+        : first.event_type === 'error'
         ? `Mobile app issue: ${role} / ${screen}`
         : `Mobile app feedback: ${role} / ${screen}`
+      const evidence = actionable.slice(0, 8).map((event: any, index: number) => {
+        const lines = [
+          `Event ${index + 1}: ${event.event_type}`,
+          `Time: ${event.occurred_at || 'unknown'}`,
+          `Screen/action: ${event.screen || 'unknown'} / ${event.action || 'unknown'}`,
+          event.error_name ? `Error: ${event.error_name}` : null,
+          event.message ? `Message: ${event.message}` : null,
+          event.feedback ? `Feedback: ${event.feedback}` : null,
+          event.stack ? `Technical details:\n${String(event.stack).slice(0, 1400)}` : null,
+        ].filter(Boolean)
+        return lines.join('\n')
+      }).join('\n\n')
       const details = [
+        healthCheck ? `Health check reviewed ${actionable.length} recent consented experience event(s).` : null,
         insight?.summary || first.message || first.feedback || first.action || 'A user experience event was reported.',
         insight?.likelyCause ? `Likely cause: ${insight.likelyCause}` : null,
         ...(insight?.suggestions || []).map((suggestion: string, index: number) => `Suggestion ${index + 1}: ${suggestion}`),
         insight.model === 'unavailable' ? 'AI analysis was unavailable; review the linked report details.' : `AI confidence: ${Math.round(insight.confidence * 100)}% (${insight.model})`,
+        healthCheck ? `\nRecent report details:\n${evidence}` : null,
       ].filter(Boolean)
 
       if (shouldDispatch) {
-        await notifyAdmins({
+        const delivery = await notifyAdmins({
           allAdmins: true,
           title,
           body: details.join('\n'),
@@ -137,6 +228,16 @@ export async function POST(request: NextRequest) {
           // helper for push/email delivery without creating a duplicate row.
           persist: Boolean(analysisUpdateError),
           emailEnabled: true,
+          emailHtml: mobileExperienceEmailHtml({
+            role,
+            screen,
+            appVersion: first.app_version || 'unknown',
+            platform: first.platform || 'unknown',
+            healthCheck,
+            reportCount: actionable.length,
+            insight,
+            events: actionable,
+          }),
           metadata: {
             reportIds,
             role,
@@ -155,8 +256,18 @@ export async function POST(request: NextRequest) {
             })),
           },
         })
+        console.info('[MOBILE][EXPERIENCE][DELIVERY]', {
+          reportCount: reportIds.length,
+          model: insight.model,
+          adminPushes: delivery.delivered,
+          adminEmails: delivery.emailed,
+          emailHtmlIncluded: true,
+        })
       }
-    }
+      } catch (error) {
+        console.error('[MOBILE][EXPERIENCE][POST_RESPONSE_ANALYSIS]', error)
+      }
+    })
 
     return NextResponse.json({ accepted: events.length })
   } catch (error) {

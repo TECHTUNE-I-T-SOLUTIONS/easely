@@ -280,7 +280,7 @@ export const sendPushNotification = async (
 
     if (error) {
       console.error('❌ [PUSH] Failed to fetch subscriptions from database:', error.message);
-      return userIds.map(userId => ({ userId, success: false, error: 'Database error' }));
+      return normalizedUserIds.map((userId) => ({ userId, success: false, error: 'Database error' }));
     }
 
     // Group subscriptions by userId

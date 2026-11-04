@@ -214,7 +214,7 @@ export async function GET(request: NextRequest) {
           remittedPlatformFee: ridesList
             .filter((ride) => ride.remitted)
             .reduce((sum, ride) => sum + Number(ride.platform_fee || 0), 0),
-          unremittedPlatformFee,
+          unremittedPlatformFee: unremittedPlatformFees,
           netDriverEarnings: ridesList.reduce((sum, ride) => sum + Number(ride.driver_earnings || 0), 0),
         },
         paymentSummary: {
