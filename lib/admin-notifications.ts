@@ -15,6 +15,7 @@ type AdminNotificationInput = {
   sourceEventId?: string
   persist?: boolean
   emailEnabled?: boolean
+  priorityEmail?: string
 }
 
 let vapidConfigured = false
@@ -38,6 +39,17 @@ function absoluteActionUrl(actionUrl?: string) {
   if (!actionUrl) return `${base}/admin/dashboard`
   if (/^https?:\/\//i.test(actionUrl)) return actionUrl
   return `${base}${actionUrl.startsWith("/") ? actionUrl : `/${actionUrl}`}`
+}
+
+function escapeHtml(value: unknown) {
+  const escaped: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }
+  return String(value ?? "").replace(/[&<>"']/g, (character) => escaped[character] || character)
 }
 
 function configureVapid() {
@@ -81,12 +93,11 @@ async function sendAdminNotificationEmails(userIds: string[], input: AdminNotifi
     .not("email", "is", null)
 
   let sent = 0
-  await Promise.all(
-    (users || []).map(async (user) => {
-      try {
-        if (isDeletedUserLike(user) || isDeletedPlaceholderEmail(user.email)) return
-        const url = absoluteActionUrl(input.actionUrl)
-        await transporter.sendMail({
+  const sendOne = async (user: NonNullable<typeof users>[number]) => {
+    try {
+      if (isDeletedUserLike(user) || isDeletedPlaceholderEmail(user.email)) return
+      const url = absoluteActionUrl(input.actionUrl)
+      await transporter.sendMail({
           from: `Charter Keke Admin Alerts <${env("CRM_EMAIL_SMTP_USER", "support@charterkeke.com")}>`,
           to: user.email,
           subject: input.title,
@@ -96,23 +107,29 @@ async function sendAdminNotificationEmails(userIds: string[], input: AdminNotifi
               <div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #f0dec8;border-radius:18px;overflow:hidden">
                 <div style="background:#111;color:#fff;padding:22px 24px">
                   <div style="color:#ff8a00;font-size:12px;font-weight:900;letter-spacing:.16em;text-transform:uppercase">Charter Keke Admin Alert</div>
-                  <h1 style="margin:8px 0 0;font-size:24px;line-height:1.25">${input.title}</h1>
+                  <h1 style="margin:8px 0 0;font-size:24px;line-height:1.25">${escapeHtml(input.title)}</h1>
                 </div>
                 <div style="padding:24px;color:#333;font-size:15px;line-height:1.65">
-                  <p>Hello ${user.first_name || "Admin"},</p>
-                  <p>${input.body}</p>
+                  <p>Hello ${escapeHtml(user.first_name || "Admin")},</p>
+                  <p>${escapeHtml(input.body).replace(/\n/g, "<br>")}</p>
                   <p><a href="${url}" style="display:inline-block;background:#ff8a00;color:#111;text-decoration:none;font-weight:800;border-radius:12px;padding:12px 16px">Open in admin</a></p>
                 </div>
               </div>
             </div>
           `,
-        })
-        sent += 1
-      } catch (error) {
-        console.error("[ADMIN][NOTIFICATIONS][EMAIL]", error)
-      }
-    })
-  )
+      })
+      sent += 1
+    } catch (error) {
+      console.error("[ADMIN][NOTIFICATIONS][EMAIL]", error)
+    }
+  }
+  const recipients = users || []
+  const priorityEmail = input.priorityEmail?.trim().toLowerCase()
+  const priorityRecipient = priorityEmail
+    ? recipients.find((user) => user.email?.trim().toLowerCase() === priorityEmail)
+    : undefined
+  if (priorityRecipient) await sendOne(priorityRecipient)
+  await Promise.all(recipients.filter((user) => user !== priorityRecipient).map(sendOne))
   return sent
 }
 

@@ -104,7 +104,7 @@ Payment and policy facts:
 // Gemini model IDs — ordered newest/fastest Flash first for low-latency chat,
 // falling back to older stable models, then Pro as last Gemini resort.
 // OpenAI is the final fallback if all Gemini models fail (see tryOpenAI below).
-const GEMINI_MODELS = [
+export const GEMINI_MODELS = [
   "gemini-3.8-flash",          // Newest Flash — primary
   "gemini-3.7-flash",
   "gemini-3.6-flash",
