@@ -248,6 +248,8 @@ export async function POST(request: NextRequest) {
     // Mark cashback reward as used if one was applied
     if (applied_cashback_reward_id) {
       try {
+        console.log("[BookRide] Marking cashback reward as used:", applied_cashback_reward_id);
+        
         const { error: updateError } = await supabaseAdmin
           .from("user_cashback_rewards")
           .update({
@@ -260,11 +262,41 @@ export async function POST(request: NextRequest) {
             updated_at: new Date().toISOString(),
           })
           .eq("id", applied_cashback_reward_id)
+          .eq("user_id", session.user.id)
 
         if (updateError) {
-          console.error("[BookRide] Failed to mark cashback reward as used:", updateError)
+          console.error("[BookRide] Failed to mark cashback reward as used:", updateError);
+          // Don't fail the booking if cashback update fails, but log it
         } else {
-          console.log("[BookRide] Cashback reward marked as used:", applied_cashback_reward_id)
+          console.log("[BookRide] Cashback reward marked as used successfully:", applied_cashback_reward_id);
+
+          // Update user_cashback_stats to reflect the usage
+          try {
+            const { data: currentStats } = await supabaseAdmin
+              .from("user_cashback_stats")
+              .select("total_cashback_used, available_cashback_balance")
+              .eq("user_id", session.user.id)
+              .single();
+
+            if (currentStats) {
+              const { error: statsUpdateError } = await supabaseAdmin
+                .from("user_cashback_stats")
+                .update({
+                  total_cashback_used: (Number(currentStats.total_cashback_used) || 0) + cashback_discount_amount,
+                  available_cashback_balance: (Number(currentStats.available_cashback_balance) || 0) - cashback_discount_amount,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("user_id", session.user.id);
+
+              if (statsUpdateError) {
+                console.error("[BookRide] Failed to update cashback stats:", statsUpdateError);
+              } else {
+                console.log("[BookRide] Cashback stats updated successfully");
+              }
+            }
+          } catch (statsError) {
+            console.error("[BookRide] Error updating cashback stats:", statsError);
+          }
 
           // Send notification about cashback usage
           await sendCashbackUsedNotification(session.user.id, {
@@ -274,7 +306,7 @@ export async function POST(request: NextRequest) {
           })
         }
       } catch (error) {
-        console.error("[BookRide] Error updating cashback reward:", error)
+        console.error("[BookRide] Error updating cashback reward:", error);
       }
     }
 
