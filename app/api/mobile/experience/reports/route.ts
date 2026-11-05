@@ -58,12 +58,10 @@ function mobileExperienceEmailHtml(input: {
       </td>
     </tr>`).join('')
 
-  const roleDisplay = input.role === 'anonymous' ? 'Anonymous (no session)' : input.role
-
   return `
     <h2 style="margin:0 0 12px;color:#181818">${input.healthCheck ? 'Requested app health check' : 'Mobile app report'}</h2>
     <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:18px;background:#fff8ef;border-radius:10px">
-      <tr><td style="padding:8px 12px"><b>Account role:</b> ${escapeHtml(roleDisplay)}</td><td style="padding:8px 12px"><b>Screen:</b> ${escapeHtml(input.screen)}</td></tr>
+      <tr><td style="padding:8px 12px"><b>Account role:</b> ${escapeHtml(input.role)}</td><td style="padding:8px 12px"><b>Screen:</b> ${escapeHtml(input.screen)}</td></tr>
       <tr><td style="padding:8px 12px"><b>App version:</b> ${escapeHtml(input.appVersion)}</td><td style="padding:8px 12px"><b>Platform:</b> ${escapeHtml(input.platform)}</td></tr>
       <tr><td style="padding:8px 12px" colspan="2"><b>Events analyzed:</b> ${input.reportCount} · <b>AI model:</b> ${escapeHtml(input.insight.model)} · <b>Confidence:</b> ${Math.round(input.insight.confidence * 100)}%</td></tr>
     </table>
@@ -83,33 +81,19 @@ function mobileExperienceEmailHtml(input: {
 export async function POST(request: NextRequest) {
   try {
     const session = await getSessionFromRequest(request)
-    const userId = session?.user?.id || null
-    const role = session?.user?.role === 'driver' ? 'driver' : session?.user?.role === 'user' || session?.user?.role === 'rider' ? 'rider' : null
+    if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    // For anonymous submissions (no session), use IP-based rate limiting
-    if (!userId) {
-      const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || request.headers.get('x-real-ip') || 'unknown'
-      const limit = rateLimit.get(ip)
-      const now = Date.now()
-      if (limit && now - limit.startedAt < 5 * 60_000 && limit.count >= 30) {
-        return NextResponse.json({ error: 'Please try again later' }, { status: 429 })
-      }
-      rateLimit.set(ip, !limit || now - limit.startedAt >= 5 * 60_000
-        ? { startedAt: now, count: 1 }
-        : { ...limit, count: limit.count + 1 })
-    } else {
-      // Authenticated submissions: role check and user-based rate limiting
-      if (!role) return NextResponse.json({ error: 'This account cannot submit mobile diagnostics' }, { status: 403 })
+    const role = session.user.role === 'driver' ? 'driver' : ['user', 'rider'].includes(session.user.role) ? 'rider' : null
+    if (!role) return NextResponse.json({ error: 'This account cannot submit mobile diagnostics' }, { status: 403 })
 
-      const limit = rateLimit.get(userId)
-      const now = Date.now()
-      if (limit && now - limit.startedAt < 5 * 60_000 && limit.count >= 30) {
-        return NextResponse.json({ error: 'Please try again later' }, { status: 429 })
-      }
-      rateLimit.set(userId, !limit || now - limit.startedAt >= 5 * 60_000
-        ? { startedAt: now, count: 1 }
-        : { ...limit, count: limit.count + 1 })
+    const limit = rateLimit.get(session.user.id)
+    const now = Date.now()
+    if (limit && now - limit.startedAt < 5 * 60_000 && limit.count >= 30) {
+      return NextResponse.json({ error: 'Please try again later' }, { status: 429 })
     }
+    rateLimit.set(session.user.id, !limit || now - limit.startedAt >= 5 * 60_000
+      ? { startedAt: now, count: 1 }
+      : { ...limit, count: limit.count + 1 })
 
     const body = await request.json().catch(() => null)
     if (body?.consent !== true || !Array.isArray(body?.events) || body.events.length === 0 || body.events.length > 15) {
@@ -134,8 +118,8 @@ export async function POST(request: NextRequest) {
 
     const rows = events.map((event: any) => ({
       ...event,
-      user_id: userId || null, // Allow null for anonymous submissions
-      user_role: role || 'anonymous', // Mark as anonymous if no session
+      user_id: session.user.id,
+      user_role: role,
       analysis: null,
     }))
     const healthCheck = body.healthCheck === true
@@ -295,32 +279,14 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const session = await getSessionFromRequest(request)
-    const userId = session?.user?.id || null
-
-    // Allow DELETE without authentication for consent revocation
-    // If no session, delete reports with user_id = null (anonymous reports)
-    if (!userId) {
-      const { error } = await supabaseAdmin
-        .from('mobile_experience_reports')
-        .delete()
-        .is('user_id', null)
-
-      if (error) {
-        console.error('[MOBILE][EXPERIENCE][DELETE][ANONYMOUS]', error)
-        return NextResponse.json({ error: 'Could not remove diagnostics' }, { status: 503 })
-      }
-      return NextResponse.json({ deleted: true })
-    }
-
-    // Authenticated: delete user's reports
-    if (!['driver', 'rider', 'user'].includes(session.user.role)) {
+    if (!session?.user?.id || !['driver', 'rider', 'user'].includes(session.user.role)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { data: reports, error: reportsError } = await supabaseAdmin
       .from('mobile_experience_reports')
       .select('event_id')
-      .eq('user_id', userId)
+      .eq('user_id', session.user.id)
 
     if (reportsError) {
       console.error('[MOBILE][EXPERIENCE][DELETE][LOOKUP]', reportsError)
@@ -342,7 +308,7 @@ export async function DELETE(request: NextRequest) {
     const { error } = await supabaseAdmin
       .from('mobile_experience_reports')
       .delete()
-      .eq('user_id', userId)
+      .eq('user_id', session.user.id)
 
     if (error) {
       console.error('[MOBILE][EXPERIENCE][DELETE]', error)
