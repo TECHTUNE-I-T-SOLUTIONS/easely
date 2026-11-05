@@ -245,65 +245,79 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
 
-    // Mark cashback reward as used if one was applied
-    if (applied_cashback_reward_id) {
+    // Mark cashback reward as used if one was applied (only after ride is successfully created)
+    if (applied_cashback_reward_id && ride && ride.id) {
       try {
-        console.log("[BookRide] Marking cashback reward as used:", applied_cashback_reward_id);
+        console.log("[BookRide] Marking cashback reward as used:", applied_cashback_reward_id, "for ride:", ride.id);
         
-        const { error: updateError } = await supabaseAdmin
-          .from("user_cashback_rewards")
-          .update({
-            status: "used",
-            used_at: new Date().toISOString(),
-            ride_id: ride.id,
-            original_fare_amount: original_fare_amount,
-            final_fare_amount: final_fare_amount,
-            discount_amount: cashback_discount_amount,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", applied_cashback_reward_id)
-          .eq("user_id", session.user.id)
+        // First verify the ride exists in the database
+        const { data: existingRide, error: rideCheckError } = await supabaseAdmin
+          .from("rides")
+          .select("id, status")
+          .eq("id", ride.id)
+          .single();
 
-        if (updateError) {
-          console.error("[BookRide] Failed to mark cashback reward as used:", updateError);
-          // Don't fail the booking if cashback update fails, but log it
+        if (rideCheckError || !existingRide) {
+          console.error("[BookRide] Ride verification failed before marking cashback:", rideCheckError);
+          // Don't mark cashback as used if ride doesn't exist
         } else {
-          console.log("[BookRide] Cashback reward marked as used successfully:", applied_cashback_reward_id);
+          console.log("[BookRide] Ride verified, proceeding to mark cashback as used");
 
-          // Update user_cashback_stats to reflect the usage
-          try {
-            const { data: currentStats } = await supabaseAdmin
-              .from("user_cashback_stats")
-              .select("total_cashback_used, available_cashback_balance")
-              .eq("user_id", session.user.id)
-              .single();
+          const { error: updateError } = await supabaseAdmin
+            .from("user_cashback_rewards")
+            .update({
+              status: "used",
+              used_at: new Date().toISOString(),
+              ride_id: ride.id,
+              original_fare_amount: original_fare_amount,
+              final_fare_amount: final_fare_amount,
+              discount_amount: cashback_discount_amount,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", applied_cashback_reward_id)
+            .eq("user_id", session.user.id)
 
-            if (currentStats) {
-              const { error: statsUpdateError } = await supabaseAdmin
+          if (updateError) {
+            console.error("[BookRide] Failed to mark cashback reward as used:", updateError);
+            // Don't fail the booking if cashback update fails, but log it
+          } else {
+            console.log("[BookRide] Cashback reward marked as used successfully:", applied_cashback_reward_id);
+
+            // Update user_cashback_stats to reflect the usage
+            try {
+              const { data: currentStats } = await supabaseAdmin
                 .from("user_cashback_stats")
-                .update({
-                  total_cashback_used: (Number(currentStats.total_cashback_used) || 0) + cashback_discount_amount,
-                  available_cashback_balance: (Number(currentStats.available_cashback_balance) || 0) - cashback_discount_amount,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("user_id", session.user.id);
+                .select("total_cashback_used, available_cashback_balance")
+                .eq("user_id", session.user.id)
+                .single();
 
-              if (statsUpdateError) {
-                console.error("[BookRide] Failed to update cashback stats:", statsUpdateError);
-              } else {
-                console.log("[BookRide] Cashback stats updated successfully");
+              if (currentStats) {
+                const { error: statsUpdateError } = await supabaseAdmin
+                  .from("user_cashback_stats")
+                  .update({
+                    total_cashback_used: (Number(currentStats.total_cashback_used) || 0) + cashback_discount_amount,
+                    available_cashback_balance: (Number(currentStats.available_cashback_balance) || 0) - cashback_discount_amount,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq("user_id", session.user.id);
+
+                if (statsUpdateError) {
+                  console.error("[BookRide] Failed to update cashback stats:", statsUpdateError);
+                } else {
+                  console.log("[BookRide] Cashback stats updated successfully");
+                }
               }
+            } catch (statsError) {
+              console.error("[BookRide] Error updating cashback stats:", statsError);
             }
-          } catch (statsError) {
-            console.error("[BookRide] Error updating cashback stats:", statsError);
-          }
 
-          // Send notification about cashback usage
-          await sendCashbackUsedNotification(session.user.id, {
-            id: applied_cashback_reward_id,
-            discount_percentage: (cashback_discount_amount / original_fare_amount) * 100,
-            discount_amount: cashback_discount_amount,
-          })
+            // Send notification about cashback usage
+            await sendCashbackUsedNotification(session.user.id, {
+              id: applied_cashback_reward_id,
+              discount_percentage: (cashback_discount_amount / original_fare_amount) * 100,
+              discount_amount: cashback_discount_amount,
+            })
+          }
         }
       } catch (error) {
         console.error("[BookRide] Error updating cashback reward:", error);
