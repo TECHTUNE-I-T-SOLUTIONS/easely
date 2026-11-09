@@ -79,11 +79,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const acceptance = await acceptRideFirstCome({
-      rideId,
-      driverUserId: session.user.id,
-      source: "app",
-    });
+    // If the ride was already accepted by this driver via the fast Supabase path,
+    // skip the first-come DB update but still run notifications/verification.
+    const { data: existingRide } = await supabaseAdmin!
+      .from("rides")
+      .select("*")
+      .eq("id", rideId)
+      .maybeSingle();
+
+    let acceptance: any;
+    if (existingRide && existingRide.driver_id === driver.id && existingRide.status === "accepted") {
+      acceptance = { success: true, ride: existingRide, status: 200, code: "accepted", message: "Already accepted" };
+    } else {
+      acceptance = await acceptRideFirstCome({
+        rideId,
+        driverUserId: session.user.id,
+        source: "app",
+      });
+    }
 
     if (!acceptance.success) {
       return NextResponse.json(
