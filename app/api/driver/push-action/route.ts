@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase"
 import { sendPushNotification } from "@/lib/push-service"
+import { scheduleRideAcceptedNotifications } from "@/lib/ride-accepted-notifications"
+
+// Notifications are dispatched in `after()`, sharing this route's time budget.
+export const maxDuration = 60
 
 // POST - Handle push notification actions (accept/reject ride)
 export async function POST(request: NextRequest) {
@@ -66,26 +70,38 @@ export async function POST(request: NextRequest) {
           response_time: 0,
         })
 
-      // Send confirmation notification to the driver
-      await sendPushNotification([driverId], {
-        title: "Ride Accepted",
-        body: "You have accepted the ride. View details to proceed.",
-        type: "ride_accepted",
-        data: {
-          rideId: ride.id,
-          action: "accepted",
-          deeplink: `/driver/ride-details/${ride.id}`,
-        },
-        imageUrl: "https://example.com/ride-accepted-icon.png",
-        actions: [
-          {
-            id: "view_details",
-            title: "View Details",
-            action: "view_ride_details",
-          },
-        ],
-      })
+      // Riders must learn the ride was accepted no matter which surface the driver
+      // tapped: this route dispatches the same SMS, email, push and live-tracking
+      // bundle as the app's accept-ride route. Idempotent, so a duplicate tap is safe.
+      try {
+        const { data: driverProfile } = await supabaseAdmin
+          .from("drivers")
+          .select("user_id")
+          .eq("id", driverId)
+          .maybeSingle()
 
+        const driverUserId = driverProfile?.user_id || userId
+
+        if (driverUserId) {
+          scheduleRideAcceptedNotifications({
+            ride: { ...ride, driver_id: driverId, status: "accepted" },
+            driverId,
+            driverUserId,
+            source: "app",
+          })
+        } else {
+          console.warn("[DriverPushAction] Accepting driver has no user id, skipping notifications", {
+            rideId,
+            driverId,
+          })
+        }
+      } catch (notifyError) {
+        console.error("[DriverPushAction] Failed to schedule ride notifications:", notifyError)
+      }
+
+      // The shared bundle above already sends the driver's own "ride accepted"
+      // confirmation to their user id. The old push here targeted drivers.id (which
+      // sendPushNotification reads as a user id), so it never reached anyone.
       return NextResponse.json({ success: true, message: "Ride accepted successfully", rideId: ride.id })
     }
 

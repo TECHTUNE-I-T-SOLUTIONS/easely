@@ -1,9 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase"
-import { emitRideAccepted, emitRideTaken } from "@/lib/push-emitters"
-import { sendRideAcceptanceSMS } from "@/lib/termii"
 import { cancelExpiredOpenRides } from "@/lib/ride-expiry"
-import { sendRideReceiptEmail } from "@/lib/ride-receipt-email"
 import { requireVerifiedDriver } from "@/lib/driver-verification"
+import { scheduleRideAcceptedNotifications } from "@/lib/ride-accepted-notifications"
 
 export type RideAcceptanceSource = "app" | "sms"
 
@@ -11,6 +9,8 @@ interface AcceptRideInput {
   rideId: string
   driverUserId: string
   source: RideAcceptanceSource
+  /** Driver ETA in minutes; persisted with the accept so notifications can use it. */
+  etaMinutes?: number | null
 }
 
 interface AcceptRideResult {
@@ -68,6 +68,11 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
       }
     }
 
+    const etaMinutes =
+      Number.isFinite(Number(input.etaMinutes)) && Number(input.etaMinutes) > 0
+        ? Math.round(Number(input.etaMinutes))
+        : null
+
     // Update ride with driver acceptance
     // Only update if ride is in pending or dispatched state and has no driver assigned
     const { data: updatedRide, error: updateError } = await supabaseAdmin
@@ -76,6 +81,7 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
         driver_id: driver.id,           // Assign driver
         status: "accepted",              // Set status to accepted
         updated_at: now,                 // Update timestamp
+        ...(etaMinutes ? { eta_minutes: etaMinutes } : {}),
       })
       .eq("id", input.rideId)
       .in("status", ["pending", "dispatched"])  // Only accept if pending or dispatched
@@ -130,20 +136,6 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
       status: updatedRide.status,
     })
 
-    // Get driver user details for notifications
-    const { data: driverUser } = await supabaseAdmin
-      .from("users")
-      .select("first_name, last_name, phone_number, email")
-      .eq("id", input.driverUserId)
-      .single()
-
-    const driverName = driverUser
-      ? `${driverUser.first_name || ""} ${driverUser.last_name || ""}`.trim() || "Driver"
-      : "Driver"
-
-    const driverPhone = driverUser?.phone_number || ""
-    const fare = Number((updatedRide as any).fare_amount ?? (updatedRide as any).fare ?? 0)
-
     await supabaseAdmin.from("ride_dispatch_logs").insert([
       {
         ride_id: input.rideId,
@@ -154,117 +146,18 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
       },
     ])
 
-    try {
-      await emitRideAccepted(
-        updatedRide.rider_id,
-        input.driverUserId,
-        input.rideId,
-        driverName,
-        driverPhone,
-        "Keke Tricycle",
-        5,
-        updatedRide.pickup_zone,
-        updatedRide.destination_zone,
-        fare
-      )
-
-      await emitRideTaken(input.rideId)
-
-      // Send SMS notifications to both parties
-      const smsTasks = []
-
-      // Get rider details for SMS
-      const { data: riderUser } = await supabaseAdmin
-        .from("users")
-        .select("first_name, last_name, phone_number, email")
-        .eq("id", updatedRide.rider_id)
-        .single()
-
-      // Send SMS to driver confirming acceptance
-      if (driverPhone) {
-        smsTasks.push(
-          sendRideAcceptanceSMS(driverPhone, input.rideId, riderUser?.first_name, updatedRide.pickup_time)
-            .then(() => {
-              console.log("[RideAcceptance] SMS sent to driver", {
-                rideId: input.rideId,
-                driverId: input.driverUserId,
-              })
-            })
-            .catch((error) => {
-              console.error("[RideAcceptance] Failed to send SMS to driver:", error)
-            })
-        )
-      }
-
-      // Send SMS to rider about driver acceptance
-      if (riderUser?.phone_number) {
-        const acceptedPickupTime = new Intl.DateTimeFormat("en-NG", {
-          weekday: "short",
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-          timeZone: "Africa/Lagos",
-        }).format(new Date(updatedRide.pickup_time || updatedRide.created_at))
-        const riderSMSMessage = `✅ DRIVER FOUND - CK-${input.rideId.slice(0, 8).toUpperCase()}
-
-Your ride has been accepted!
-Driver: ${driverName}
-Pickup time: ${acceptedPickupTime}
-Open in app: charterkeke:///rider/ride-details?rideId=${input.rideId}
-
-📍 They are heading to your pickup location.
-🔔 You will receive updates soon.
-
-Get ready for pickup!`
-        smsTasks.push(
-          (async () => {
-            try {
-              const { sendSMS } = await import("@/lib/termii")
-              await sendSMS({
-                to: riderUser.phone_number,
-                message: riderSMSMessage,
-                channel: "dnd",
-                type: "plain",
-              })
-              console.log("[RideAcceptance] SMS sent to rider", {
-                rideId: input.rideId,
-                riderId: updatedRide.rider_id,
-              })
-            } catch (error) {
-              console.error("[RideAcceptance] Failed to send SMS to rider:", error)
-            }
-          })()
-        )
-      }
-
-      await Promise.allSettled(smsTasks)
-
-      const emailRide = {
-        ...updatedRide,
-        rider: riderUser,
-        driver,
-        driverUser,
-      }
-      const emailTasks = []
-      if (riderUser?.email) {
-        emailTasks.push(
-          sendRideReceiptEmail({ to: riderUser.email, ride: emailRide, audience: "rider" })
-            .catch((error) => console.error("[RideAcceptance] Failed to email rider receipt:", error))
-        )
-      }
-      if (driverUser?.email) {
-        emailTasks.push(
-          sendRideReceiptEmail({ to: driverUser.email, ride: emailRide, audience: "driver" })
-            .catch((error) => console.error("[RideAcceptance] Failed to email driver receipt:", error))
-        )
-      }
-      await Promise.allSettled(emailTasks)
-    } catch (notificationError) {
-      console.error("[RideAcceptance] notification error:", notificationError)
-    }
+    // Rider + driver push, "ride taken" broadcast to other drivers, SMS to both
+    // parties, receipt emails, admin alert and the native live-tracking card are all
+    // dispatched by the shared notifier *after* this response is sent. They were
+    // previously awaited inline here, which is why accepting felt slow; skipping them
+    // on the fast path is why they never fired at all.
+    scheduleRideAcceptedNotifications({
+      ride: updatedRide as any,
+      driverId: driver.id,
+      driverUserId: input.driverUserId,
+      etaMinutes: etaMinutes ?? (updatedRide as any).eta_minutes ?? null,
+      source: input.source,
+    })
 
     return {
       success: true,

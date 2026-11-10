@@ -4,6 +4,10 @@ import { supabaseAdmin } from "@/lib/supabase"
 import { acceptRideFirstCome } from "@/lib/ride-acceptance"
 import { toTermiiPhoneNumber } from "@/lib/termii"
 
+// A driver can accept by SMS here, which schedules the same rider/driver SMS, email
+// and push bundle in `after()`. Give that work room past the webhook's own response.
+export const maxDuration = 60
+
 function getHeader(request: NextRequest, key: string) {
   return request.headers.get(key) || request.headers.get(key.toLowerCase())
 }

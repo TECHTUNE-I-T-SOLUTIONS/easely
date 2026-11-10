@@ -3,9 +3,12 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { acceptRideFirstCome } from "@/lib/ride-acceptance";
 import { getDriverRemittanceSummary } from "@/lib/driver-settlement";
 import { supabaseAdmin } from "@/lib/supabase";
-import { notifyAdmins } from "@/lib/admin-notifications";
-import { sendPushNotification } from "@/lib/push-service";
-import { sendNativeLiveTrackingNotification } from "@/lib/live-tracking-native";
+import { scheduleRideAcceptedNotifications } from "@/lib/ride-accepted-notifications";
+
+// The rider/driver SMS, receipt emails and push run in `after()`, which shares this
+// route's time budget. The driver's response is already sent, so give the
+// notification work room instead of the platform's short default.
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,43 +72,90 @@ export async function POST(request: NextRequest) {
       .in("status", ["accepted", "in_progress"]);
 
     if (!activeRidesError && activeRides && activeRides.length > 0) {
-      return NextResponse.json(
-        {
-          error: "You already have an active ride. Please complete your current ride before accepting a new one.",
-          code: "has_active_ride",
-          activeRideId: activeRides[0].id,
-        },
-        { status: 403 }
-      );
+      // Re-accepting the ride you already hold is a retry, not a conflict: fall
+      // through so the notification bundle still gets dispatched for it.
+      const sameRide = activeRides.find((ride) => ride.id === rideId);
+
+      if (!sameRide) {
+        return NextResponse.json(
+          {
+            error: "You already have an active ride. Please complete your current ride before accepting a new one.",
+            code: "has_active_ride",
+            activeRideId: activeRides[0].id,
+          },
+          { status: 403 }
+        );
+      }
     }
 
+    const etaMinutes =
+      Number.isFinite(Number(eta_minutes)) && Number(eta_minutes) > 0
+        ? Math.round(Number(eta_minutes))
+        : null;
+
     // If the ride was already accepted by this driver via the fast Supabase path,
-    // skip the first-come DB update but still run notifications/verification.
+    // skip the first-come DB update — but still dispatch the full notification
+    // bundle. Notification dispatch is idempotent, so a client retry, the SMS
+    // webhook or this route racing on the same ride can never double-text anyone.
     const { data: existingRide } = await supabaseAdmin!
       .from("rides")
       .select("*")
       .eq("id", rideId)
       .maybeSingle();
 
-    let acceptance: any;
-    if (existingRide && existingRide.driver_id === driver.id && existingRide.status === "accepted") {
-      acceptance = { success: true, ride: existingRide, status: 200, code: "accepted", message: "Already accepted" };
+    const alreadyAcceptedByThisDriver =
+      existingRide?.driver_id === driver.id &&
+      ["accepted", "in_progress"].includes(String(existingRide?.status || ""));
+
+    let ride: any;
+
+    if (alreadyAcceptedByThisDriver) {
+      let resolvedRide = existingRide;
+      if (etaMinutes && existingRide?.id) {
+        const { data: etaRide, error: etaUpdateError } = await supabaseAdmin!
+          .from("rides")
+          .update({ eta_minutes: etaMinutes, updated_at: new Date().toISOString() })
+          .eq("id", existingRide.id)
+          .select("*")
+          .single();
+
+        if (etaUpdateError) {
+          console.error("[AcceptRide] Failed to persist eta_minutes:", etaUpdateError);
+        } else if (etaRide) {
+          resolvedRide = etaRide;
+        }
+      }
+
+      ride = resolvedRide;
+
+      scheduleRideAcceptedNotifications({
+        ride,
+        driverId: driver.id,
+        driverUserId: session.user.id,
+        etaMinutes: etaMinutes ?? ride?.eta_minutes ?? null,
+        source: "app",
+      });
     } else {
-      acceptance = await acceptRideFirstCome({
+      const acceptance = await acceptRideFirstCome({
         rideId,
         driverUserId: session.user.id,
         source: "app",
+        etaMinutes,
       });
-    }
 
-    if (!acceptance.success) {
-      return NextResponse.json(
-        {
-          error: acceptance.message,
-          code: acceptance.code,
-        },
-        { status: acceptance.status }
-      );
+      if (!acceptance.success) {
+        return NextResponse.json(
+          {
+            error: acceptance.message,
+            code: acceptance.code,
+          },
+          { status: acceptance.status }
+        );
+      }
+
+      // acceptRideFirstCome already persisted the ETA and scheduled the rider/driver
+      // SMS, email and push notifications — nothing else to dispatch here.
+      ride = acceptance.ride;
     }
 
     // Set driver status to 'busy' after accepting a ride
@@ -123,132 +173,10 @@ export async function POST(request: NextRequest) {
       // Don't fail the request if status update fails - ride is already accepted
     }
 
-    // Send push notification to rider
-    try {
-      const ride = acceptance.ride;
-      const { data: driverUser } = await supabaseAdmin!
-        .from("users")
-        .select("first_name, last_name, phone_number")
-        .eq("id", session.user.id)
-        .single();
-
-      const driverName = driverUser
-        ? `${driverUser.first_name} ${driverUser.last_name}`
-        : "A driver";
-
-      // Get driver's vehicle plate
-      const { data: driverDetails } = await supabaseAdmin!
-        .from("drivers")
-        .select("plate_number")
-        .eq("user_id", session.user.id)
-        .single();
-
-      const vehiclePlate = driverDetails?.plate_number || '';
-
-      // Send standard notification
-      await sendPushNotification([ride.rider_id], {
-        title: "✅ Driver Accepted",
-        body: `${driverName} accepted your ride request. Heading to pickup location.`,
-        type: "ride_accepted",
-        categoryId: "ride_accepted_action",
-        data: {
-          rideId: ride.id,
-          deeplink: `/rider/active-ride?rideId=${ride.id}`,
-          driverId: driver.id,
-          driverName,
-          pickupZone: ride.pickup_zone,
-          destinationZone: ride.destination_zone,
-        },
-      });
-
-      // Also send native live tracking notification with emoji-based visuals
-      // Extract coordinates from ride data if available
-      const pickupCoords = extractCoordinates(ride.pickup_description);
-      const destCoords = extractCoordinates(ride.destination_description);
-
-      if (pickupCoords && destCoords) {
-        await sendNativeLiveTrackingNotification({
-          rideId: ride.id,
-          riderId: ride.rider_id,
-          driverName,
-          driverLocation: { lat: 0, lng: 0 }, // Will be updated on first location update
-          pickupLocation: {
-            lat: pickupCoords.latitude,
-            lng: pickupCoords.longitude,
-            address: ride.pickup_zone,
-          },
-          destinationLocation: {
-            lat: destCoords.latitude,
-            lng: destCoords.longitude,
-            address: ride.destination_zone,
-          },
-          etaMinutes: eta_minutes || 10,
-          distanceKm: 5, // Will be updated on first location update
-          status: 'accepted',
-          vehiclePlate,
-        });
-      }
-
-      console.log("[AcceptRide] Push notification sent to rider", {
-        rideId,
-        riderId: ride.rider_id,
-      });
-
-    } catch (pushError) {
-      console.error("[AcceptRide] Failed to send notification:", pushError);
-    }
-
-    try {
-      const ride = acceptance.ride;
-      const { data: driverUser } = await supabaseAdmin!
-        .from("users")
-        .select("first_name, last_name")
-        .eq("id", session.user.id)
-        .single();
-      const driverName = driverUser ? `${driverUser.first_name} ${driverUser.last_name}` : "A driver";
-
-      await notifyAdmins({
-        allAdmins: true,
-        department: "ops",
-        title: "Ride accepted",
-        body: `${driverName} accepted a ride from ${ride.pickup_zone} to ${ride.destination_zone}.`,
-        type: "ride_accepted",
-        actionUrl: `/admin/rides?ride=${ride.id}`,
-        metadata: { rideId: ride.id, riderId: ride.rider_id, driverUserId: session.user.id, driverId: driver.id },
-        sourceEventId: `ride_accepted:${ride.id}:${session.user.id}`,
-      });
-    } catch (notifyError) {
-      console.error("[AcceptRide] Admin notification failed:", notifyError);
-    }
-
-    const etaMinutes = Number.isFinite(Number(eta_minutes)) && Number(eta_minutes) > 0
-      ? Math.round(Number(eta_minutes))
-      : null;
-
-    let rideResponse = acceptance.ride;
-
-    if (etaMinutes && rideResponse?.id) {
-      const { data: etaRide, error: etaUpdateError } = await supabaseAdmin!
-        .from("rides")
-        .update({
-          eta_minutes: etaMinutes,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", rideResponse.id)
-        .select("*")
-        .single();
-
-      if (!etaUpdateError && etaRide) {
-        rideResponse = etaRide;
-      } else if (etaUpdateError) {
-        console.error("[AcceptRide] Failed to persist eta_minutes:", etaUpdateError);
-      }
-    }
-
     return NextResponse.json({
       success: true,
-      ride: rideResponse,
-      eta_minutes: rideResponse?.eta_minutes ?? etaMinutes ?? null,
+      ride,
+      eta_minutes: ride?.eta_minutes ?? etaMinutes ?? null,
     });
   } catch (error) {
     console.error("API error:", error);
@@ -257,18 +185,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-// Helper function to extract coordinates from description string
-function extractCoordinates(description?: string): { latitude: number; longitude: number } | null {
-  if (!description) return null
-  const latMatch = description.match(/Lat:\s*([-\d.]+)/)
-  const lngMatch = description.match(/Lng:\s*([-\d.]+)/)
-  if (latMatch && lngMatch) {
-    return {
-      latitude: parseFloat(latMatch[1]),
-      longitude: parseFloat(lngMatch[1]),
-    }
-  }
-  return null
 }
