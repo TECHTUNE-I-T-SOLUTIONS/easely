@@ -100,6 +100,9 @@ export async function POST(request: NextRequest) {
       },
     ]);
 
+    // Fix: parentheses added to correct operator precedence for SMTP check
+    // Original: !env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD")
+    // Fixed: (!env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD"))
     sendWelcomeEmail({
       id: user.id,
       firstName: first_name,

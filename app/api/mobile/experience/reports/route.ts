@@ -137,11 +137,11 @@ export async function POST(request: NextRequest) {
     let actionable: Array<Record<string, any>> = (inserted || []).filter((event: any) => actionableTypes.includes(event.event_type))
     if (actionable.length || healthCheck) after(async () => {
       try {
-      if (healthCheck && userId) {
+      if (healthCheck && session.user.id) {
         const { data: recentReports, error: historyError } = await supabaseAdmin
           .from('mobile_experience_reports')
           .select('event_id,event_type,screen,action,occurred_at,error_name,message,stack,feedback,app_version,platform,analysis')
-          .eq('user_id', userId)
+          .eq('user_id', session.user.id)
           .order('created_at', { ascending: false })
           .limit(30)
         if (historyError) console.error('[MOBILE][EXPERIENCE][HEALTH_CHECK_HISTORY]', historyError)

@@ -46,7 +46,7 @@ function row(label: string, value?: string | null) {
 }
 
 export async function sendWelcomeEmail(user: WelcomeEmailUser) {
-  if (!user.email || isDeletedPlaceholderEmail(user.email) || !env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD")) {
+  if (!user.email || isDeletedPlaceholderEmail(user.email) || (!env("CRM_EMAIL_SMTP_PASSWORD") && !env("CRM_EMAIL_SMTP_FALLBACK_PASSWORD"))) {
     return { skipped: true, reason: "SMTP is not configured" }
   }
 
