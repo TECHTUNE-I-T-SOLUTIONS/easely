@@ -30,7 +30,9 @@ export async function POST(request: NextRequest) {
 
     const { data: driver } = await supabaseAdmin!
       .from("drivers")
-      .select("id")
+      // select("*") so a database without the lock columns yet still resolves
+      // the driver instead of failing the whole accept.
+      .select("*")
       .eq("user_id", session.user.id)
       .single();
 
@@ -38,6 +40,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Driver profile not found" },
         { status: 404 }
+      );
+    }
+
+    // Accounts locked for integrity review (e.g. too many cancellations in a day)
+    // cannot take new rides until an admin clears them.
+    if (driver.lock_status && driver.lock_status !== "active") {
+      return NextResponse.json(
+        {
+          error:
+            driver.lock_status === "suspended"
+              ? "Your account is suspended. Please contact support."
+              : "Your account is under review and cannot accept rides right now.",
+          code: "account_locked",
+          lockStatus: driver.lock_status,
+          lockReason: driver.lock_reason ?? null,
+        },
+        { status: 403 }
       );
     }
 

@@ -6,9 +6,9 @@ import {
   sendSpinWheelNotification,
   sendCashbackUsedNotification 
 } from "@/lib/cashback-notifications"
-import { sendPushNotification } from "@/lib/push-service"
+import { getCashbackOverview, awardFirstRideReward } from "@/lib/cashback-service"
 
-// GET - Get user's cashback stats and available rewards
+// GET - Get user's cashback stats, available rewards and full reward history
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionFromRequest(request)
@@ -19,68 +19,42 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const checkEligibility = searchParams.get("checkEligibility") === "true"
     const programType = searchParams.get("programType")
-
-    // Check and mark expired cashback for this user (background check)
-    try {
-      await supabaseAdmin.rpc('check_and_mark_expired_cashback', {
-        p_user_id: session.user.id
-      })
-    } catch (err) {
-      // Log but don't fail the request if this fails
-      console.warn('[UserCashback] Failed to check expired cashback:', err)
-    }
-
-    // Get user's cashback stats
-    const { data: stats, error: statsError } = await supabaseAdmin
-      .from("user_cashback_stats")
-      .select("*")
-      .eq("user_id", session.user.id)
-      .single()
-
-    if (statsError && statsError.code !== 'PGRST116') {
-      throw statsError
-    }
-
-    // Get available cashback rewards
-    const { data: availableRewards, error: rewardsError } = await supabaseAdmin
-      .from("user_cashback_rewards")
-      .select(`
-        *,
-        cashback_programs(name, program_type, discount_percentage)
-      `)
-      .eq("user_id", session.user.id)
-      .eq("status", "earned")
-      .or("expires_at.is.null,expires_at.gt.now()")
-      .order("expires_at", { ascending: true })
-
-    if (rewardsError) throw rewardsError
+    const fresh = searchParams.get("fresh") === "true"
 
     let eligibility = null
-    if (checkEligibility && programType) {
-      // Check eligibility for specific program
-      const { data: eligibilityData, error: eligibilityError } = await supabaseAdmin
-        .rpc('check_cashback_eligibility', {
-          p_user_id: session.user.id,
-          p_program_type: programType
-        })
+    const eligibilityPromise: Promise<any> =
+      checkEligibility && programType
+        ? (async () => {
+            try {
+              const { data } = await supabaseAdmin.rpc("check_cashback_eligibility", {
+                p_user_id: session.user.id,
+                p_program_type: programType,
+              })
+              return data
+            } catch {
+              return null
+            }
+          })()
+        : Promise.resolve(null)
 
-      if (!eligibilityError) {
-        eligibility = eligibilityData
-      }
-    }
+    const [overview, eligibilityData] = await Promise.all([
+      getCashbackOverview(session.user.id),
+      eligibilityPromise,
+    ])
+    eligibility = eligibilityData
 
-    return NextResponse.json({
-      stats: stats || {
-        total_rides_completed: 0,
-        total_cashback_earned: 0,
-        total_cashback_used: 0,
-        available_cashback_balance: 0,
-        first_ride_bonus_earned: false,
-        spin_wheel_plays_count: 0
-      },
-      availableRewards: availableRewards || [],
-      eligibility
+    const response = NextResponse.json({
+      ...overview,
+      eligibility,
     })
+
+    // Short private cache keeps re-opening the screen instant without ever
+    // serving another rider's data.
+    response.headers.set(
+      "Cache-Control",
+      fresh ? "no-store" : "private, max-age=10, stale-while-revalidate=30"
+    )
+    return response
   } catch (error) {
     console.error("[UserCashback] GET error:", error)
     return NextResponse.json({ error: "Failed to fetch cashback data" }, { status: 500 })
@@ -144,130 +118,25 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "generate_first_ride_reward") {
-      // Generate first ride reward when user opens treasure chest
-      // Check if user already has a first ride reward
-      const { data: existingReward, error: existingError } = await supabaseAdmin
-        .from("user_cashback_rewards")
-        .select("*, cashback_programs(*)")
-        .eq("user_id", session.user.id)
-        .eq("status", "earned")
-        .single()
-
-      if (!existingError && existingReward) {
-        return NextResponse.json({ 
-          error: "You already have a first ride reward" 
-        }, { status: 400 })
-      }
-
-      // Get the first ride bonus program
-      const { data: firstRideProgram } = await supabaseAdmin!
-        .from("cashback_programs")
-        .select("*")
-        .eq("program_type", "first_ride")
-        .eq("is_active", true)
-        .single()
-
-      if (!firstRideProgram) {
-        return NextResponse.json({ 
-          error: "First ride bonus program not found" 
-        }, { status: 404 })
-      }
-
-      // Fixed 10% for the first ride bonus
-      const randomDiscount = 10;
-
-      const { data: newReward, error: rewardError } = await supabaseAdmin!
-        .from("user_cashback_rewards")
-        .insert({
-          user_id: session.user.id,
-          program_id: firstRideProgram.id,
-          discount_percentage: randomDiscount,
-          discount_amount: 0, // Will be calculated when used
-          original_fare_amount: 0,
-          final_fare_amount: 0,
-          status: "earned",
-          earned_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + (firstRideProgram.expiry_days || 30) * 24 * 60 * 60 * 1000).toISOString(),
-          metadata: {
-            source: 'first_ride_bonus',
-            random_discount: true,
-          },
-        })
-        .select(`
-          *,
-          cashback_programs(name, program_type, discount_percentage)
-        `)
-        .single()
-
-      if (rewardError) {
-        console.error("[UserCashback] Failed to insert reward:", rewardError)
-        // If the error is about notification column, it's likely a trigger issue
-        // We can still succeed by manually sending the notification
-        if (rewardError.message?.includes('body') || rewardError.code === '42703') {
-          console.warn("[UserCashback] Trigger error occurred, but reward may have been inserted")
-          // Try to fetch the reward that might have been inserted
-          const { data: insertedReward } = await supabaseAdmin
-            .from("user_cashback_rewards")
-            .select(`
-              *,
-              cashback_programs(name, program_type, discount_percentage)
-            `)
-            .eq("user_id", session.user.id)
-            .eq("program_id", firstRideProgram.id)
-            .eq("status", "earned")
-            .order("earned_at", { ascending: false })
-            .limit(1)
-            .single()
-
-          if (insertedReward) {
-            // Send push notification manually
-            try {
-              await sendPushNotification([session.user.id], {
-                title: "🎉 Congratulations!",
-                body: `You won ${randomDiscount}% off your next ride! Use it before it expires.`,
-                type: "cashback" as any,
-                categoryId: "cashback",
-                data: {
-                  deeplink: "/rider/cashback",
-                  discount_percentage: randomDiscount
-                }
-              })
-            } catch (notifError) {
-              console.warn("[UserCashback] Failed to send notification:", notifError)
-            }
-
-            return NextResponse.json({
-              reward: insertedReward,
-              message: `Congratulations! You won ${randomDiscount}% off your next ride!`
-            })
-          }
-        }
-        throw rewardError
-      }
-
-      console.log("[UserCashback] First ride reward generated for user:", session.user.id, "Discount:", randomDiscount + "%")
-
-      // Send push notification manually instead of relying on triggers
+      // Idempotent: the service returns the existing first_ride reward instead of
+      // minting a second one, so re-opening the treasure chest can never double-award.
       try {
-        await sendPushNotification([session.user.id], {
-          title: "🎉 Congratulations!",
-          body: `You won ${randomDiscount}% off your next ride! Use it before it expires.`,
-          type: "cashback" as any,
-          categoryId: "cashback",
-          data: {
-            deeplink: "/rider/cashback",
-            discount_percentage: randomDiscount
-          }
+        const result = await awardFirstRideReward(session.user.id)
+        return NextResponse.json({
+          reward: result.reward,
+          alreadyClaimed: result.alreadyClaimed,
+          message: result.message,
         })
-      } catch (notifError) {
-        console.warn("[UserCashback] Failed to send notification:", notifError)
-        // Don't fail the request if notification fails
+      } catch (awardError: any) {
+        if (awardError?.code === "not_eligible") {
+          return NextResponse.json({ error: awardError.message }, { status: 400 })
+        }
+        if (awardError?.code === "program_missing") {
+          return NextResponse.json({ error: awardError.message }, { status: 404 })
+        }
+        console.error("[UserCashback] Failed to award first ride reward:", awardError)
+        return NextResponse.json({ error: "Failed to generate reward" }, { status: 500 })
       }
-
-      return NextResponse.json({
-        reward: newReward,
-        message: `Congratulations! You won ${randomDiscount}% off your next ride!`
-      })
     }
 
     if (action === "spin_wheel") {

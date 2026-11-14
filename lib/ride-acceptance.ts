@@ -81,6 +81,10 @@ export async function acceptRideFirstCome(input: AcceptRideInput): Promise<Accep
         driver_id: driver.id,           // Assign driver
         status: "accepted",              // Set status to accepted
         updated_at: now,                 // Update timestamp
+        // The rider-facing cancellation gate measures the free window from this
+        // stamp. Without it every accepted ride looks "not yet accepted" and the
+        // rider is never charged after the free window.
+        accepted_at: now,
         ...(etaMinutes ? { eta_minutes: etaMinutes } : {}),
       })
       .eq("id", input.rideId)
